@@ -15,7 +15,11 @@
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <AssemblyTitle>Rushframe</AssemblyTitle>
     <Product>Rushframe</Product>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>Assets\Rushframe.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\Rushframe_icon.png" />
+  </ItemGroup>
 
 </Project>

@@ -10,7 +10,12 @@ public sealed class RecoveryPersistenceTests
         var root = Path.Combine(Path.GetTempPath(), $"rushframe-repo-{Guid.NewGuid():N}");
         try
         {
-            var project = new Project { Name = "QA Project" };
+            var project = new Project
+            {
+                Name = "QA Project",
+                CampaignDescription = "Create a launch edit for the summer campaign.",
+            };
+            project.Tasks.Add(new CampaignTask { Title = "Select hero clips", IsCompleted = true });
             var path = Path.Combine(root, "qa.rushframe");
             var repo = new ProjectRepository();
 
@@ -20,6 +25,10 @@ public sealed class RecoveryPersistenceTests
             Assert.NotNull(loaded);
             Assert.Equal(project.Id, loaded.Id);
             Assert.Equal("QA Project", loaded.Name);
+            Assert.Equal(project.CampaignDescription, loaded.CampaignDescription);
+            Assert.Single(loaded.Tasks);
+            Assert.Equal("Select hero clips", loaded.Tasks[0].Title);
+            Assert.True(loaded.Tasks[0].IsCompleted);
         }
         finally
         {

@@ -61,3 +61,9 @@ scripts/
 apps/
 tests/conftest.py
 tests/test_*.py
+
+# Active Rushframe intelligence tooling/tests
+!scripts/
+scripts/*
+!scripts/setup-intelligence.ps1
+!tests/test_media_intelligence_v2.py

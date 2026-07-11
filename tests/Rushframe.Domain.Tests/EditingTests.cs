@@ -569,6 +569,15 @@ public class EditingTests
         var result = cmd.Execute(seq);
 
         Assert.True(result.Success);
+        var transition = Assert.Single(seq.Transitions);
+        Assert.Equal(left.Id, transition.LeftItemId);
+        Assert.Equal(right.Id, transition.RightItemId);
+        Assert.Equal(TransitionKind.CrossDissolve, transition.Kind);
+
+        var undo = cmd.Undo(seq);
+
+        Assert.True(undo.Success);
+        Assert.Empty(seq.Transitions);
     }
 
     [Fact]

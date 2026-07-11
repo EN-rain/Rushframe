@@ -6,12 +6,17 @@ namespace Rushframe.Desktop.Tests;
 public sealed class WorkspaceLayoutTests
 {
     [Fact]
-    public void default_layout_has_all_panels_open()
+    public void default_layout_opens_editor_panels_and_closes_utility_drawers()
     {
         var layout = WorkspaceLayout.Default();
 
-        foreach (var panel in PanelRegistry.All)
-            Assert.True(layout.IsPanelOpen(panel.Id));
+        Assert.True(layout.IsPanelOpen(PanelId.Media));
+        Assert.True(layout.IsPanelOpen(PanelId.Preview));
+        Assert.True(layout.IsPanelOpen(PanelId.Inspector));
+        Assert.True(layout.IsPanelOpen(PanelId.Timeline));
+        Assert.False(layout.IsPanelOpen(PanelId.Tasks));
+        Assert.False(layout.IsPanelOpen(PanelId.RenderQueue));
+        Assert.False(layout.IsPanelOpen(PanelId.MediaIntelligence));
     }
 
     [Fact]
@@ -37,7 +42,7 @@ public sealed class WorkspaceLayoutTests
         Assert.True(layout.IsPanelOpen(PanelId.Preview));
         Assert.True(layout.IsPanelOpen(PanelId.Inspector));
         Assert.True(layout.IsPanelOpen(PanelId.Timeline));
-        Assert.True(layout.IsPanelOpen(PanelId.Tasks));
+        Assert.False(layout.IsPanelOpen(PanelId.Tasks));
     }
 
     [Fact]

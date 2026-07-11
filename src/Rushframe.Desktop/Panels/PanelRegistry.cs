@@ -12,6 +12,7 @@ public static class PanelRegistry
         new() { Id = PanelId.Timeline, Title = "Timeline", CanClose = false, CanFloat = true },
         new() { Id = PanelId.Tasks, Title = "Tasks / Campaign", CanFloat = true },
         new() { Id = PanelId.RenderQueue, Title = "Render Queue", CanFloat = true },
+        new() { Id = PanelId.MediaIntelligence, Title = "Media Intelligence", CanFloat = true },
     ];
 
     public static ImmutableArray<PanelDefinition> All => _panels;

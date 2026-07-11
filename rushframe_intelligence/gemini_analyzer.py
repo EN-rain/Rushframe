@@ -83,8 +83,8 @@ def analyze_frame(
     encoded = base64.b64encode(image.read_bytes()).decode("ascii")
     requested = (
         prompt
-        + "\nReturn only JSON with keys: description, tags, visual_energy. "
-        + "tags must be an array of short strings and visual_energy a number from 0 to 1."
+        + "\nReturn only a valid JSON object. Preserve every key requested by the prompt. "
+        + "Use arrays for list fields, booleans for flags, and numbers from 0 to 1 for confidence or score fields."
     )
     payload = {
         "contents": [{

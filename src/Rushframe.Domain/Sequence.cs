@@ -9,6 +9,7 @@ public sealed class Sequence
     public double Fps { get; set; } = 30.0;
     public List<Track> Tracks { get; init; } = [];
     public List<Marker> Markers { get; init; } = [];
+    public List<Transition> Transitions { get; init; } = [];
 
     public MediaTime Duration
     {

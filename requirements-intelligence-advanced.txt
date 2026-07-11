@@ -1,0 +1,9 @@
+# Optional heavyweight features. Install only the capabilities you enable.
+-r requirements-intelligence.txt
+whisperx
+pyannote.audio
+paddleocr
+laion-clap
+transformers
+accelerate
+qwen-vl-utils

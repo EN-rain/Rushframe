@@ -1,0 +1,8 @@
+# Rushframe local media-intelligence core
+scenedetect[opencv]
+faster-whisper
+librosa
+numpy
+opencv-python-headless
+sentence-transformers
+httpx

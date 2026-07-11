@@ -7,6 +7,8 @@ public sealed class Project
     public List<Sequence> Sequences { get; init; } = [new()];
     public List<MediaAsset> MediaLibrary { get; init; } = [];
     public List<MediaIntelligenceAnalysis> MediaIntelligence { get; init; } = [];
+    public string CampaignDescription { get; set; } = string.Empty;
+    public List<CampaignTask> Tasks { get; init; } = [];
 
     public Sequence? MainSequence => Sequences.FirstOrDefault();
 

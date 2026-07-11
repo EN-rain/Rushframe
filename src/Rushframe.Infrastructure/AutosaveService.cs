@@ -15,7 +15,7 @@ public sealed class AutosaveService
         Directory.CreateDirectory(autosaveDir);
     }
 
-    public void Save(Project project)
+    public string Save(Project project)
     {
         var temp = Path.Combine(_autosaveDir, $".{project.Id}.tmp");
         var final = Path.Combine(_autosaveDir, $"{project.Id}.autosave");
@@ -26,6 +26,8 @@ public sealed class AutosaveService
         foreach (var f in Directory.GetFiles(_autosaveDir, "*.autosave")
                        .OrderByDescending(File.GetLastWriteTime).Skip(MaxKeep))
             File.Delete(f);
+
+        return final;
     }
 
     public Project? LoadMostRecent()
@@ -35,7 +37,7 @@ public sealed class AutosaveService
         return latest != null ? ProjectSerializer.Deserialize(File.ReadAllText(latest)) : null;
     }
 
-    public void StartBackground(Project project, TimeSpan interval)
+    public void StartBackground(Project project, TimeSpan interval, Action<string>? saved = null, Action<Exception>? failed = null)
     {
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
@@ -46,7 +48,15 @@ public sealed class AutosaveService
             while (!token.IsCancellationRequested)
             {
                 await Task.Delay(interval, token);
-                if (!token.IsCancellationRequested) Save(project);
+                if (token.IsCancellationRequested) continue;
+                try
+                {
+                    saved?.Invoke(Save(project));
+                }
+                catch (Exception ex)
+                {
+                    failed?.Invoke(ex);
+                }
             }
         }, token);
     }

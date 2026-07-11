@@ -65,7 +65,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void Application_should_depend_on_Domain()
     {
-        var assembly = typeof(Application.SplitClipCommand).Assembly;
+        var assembly = typeof(Application.CopyClipCommand).Assembly;
         var result = Types
             .InAssembly(assembly)
             .That()

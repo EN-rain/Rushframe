@@ -27,4 +27,23 @@ dotnet run --project src/Rushframe.Desktop
 
 - .NET 10 SDK
 - Windows (WPF)
-- FFmpeg (for media playback and export)
+- FFmpeg and FFprobe
+- Python 3.11+ for optional media intelligence
+
+## Local media intelligence
+
+Rushframe can turn source media into structured scenes, word-timed transcripts, audio measurements, editing moments, repeated-take groups, and a searchable SQLite context index.
+
+Install the local core:
+
+```powershell
+.\scripts\setup-intelligence.ps1
+```
+
+Install optional OCR, speaker diarization, sound-event recognition, precise WhisperX alignment, and local Qwen visual understanding:
+
+```powershell
+.\scripts\setup-intelligence.ps1 -Advanced
+```
+
+The desktop Intelligence panel runs the worker locally and stores versioned analysis under Rushframe's local application-data directory. See `rushframe_intelligence/README.md` for CLI and output details.

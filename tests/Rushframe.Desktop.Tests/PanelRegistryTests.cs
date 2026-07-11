@@ -7,7 +7,7 @@ public sealed class PanelRegistryTests
     [Fact]
     public void registry_contains_all_panels()
     {
-        Assert.Equal(6, PanelRegistry.All.Length);
+        Assert.Equal(7, PanelRegistry.All.Length);
     }
 
     [Fact]

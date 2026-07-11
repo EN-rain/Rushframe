@@ -4,7 +4,7 @@ namespace Rushframe.Desktop.Workspace;
 
 public sealed class WorkspaceLayout
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     public int Version { get; init; } = SchemaVersion;
 
@@ -13,8 +13,13 @@ public sealed class WorkspaceLayout
     public static WorkspaceLayout Default() => new()
     {
         Panels = PanelRegistry.All.ToDictionary(
-            p => p.Id.Key,
-            _ => new PanelState { IsOpen = true }),
+            panel => panel.Id.Key,
+            panel => new PanelState
+            {
+                IsOpen = panel.Id != PanelId.Tasks
+                    && panel.Id != PanelId.RenderQueue
+                    && panel.Id != PanelId.MediaIntelligence,
+            }),
     };
 
     public bool IsPanelOpen(PanelId id) =>

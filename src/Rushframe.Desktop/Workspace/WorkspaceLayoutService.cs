@@ -25,7 +25,7 @@ public sealed class WorkspaceLayoutService
         {
             var json = File.ReadAllText(_filePath);
             var layout = JsonSerializer.Deserialize<WorkspaceLayout>(json, JsonOptions);
-            if (layout != null) return layout;
+            if (layout?.Version == WorkspaceLayout.SchemaVersion) return layout;
         }
         catch
         {

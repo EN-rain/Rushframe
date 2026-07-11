@@ -9,6 +9,7 @@ public sealed class TimelineViewport
     private const double MaxZoom = 1000.0;
 
     public double PixelsPerSecond { get; private set; } = DefaultPixelsPerSecond;
+    public double ZoomScale => PixelsPerSecond / DefaultPixelsPerSecond;
     public double HorizontalOffset { get; set; }
     public double VerticalOffset { get; set; }
     public double ViewportWidth { get; set; } = 800;

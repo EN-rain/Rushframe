@@ -92,6 +92,61 @@ public sealed class RemoveEffectCommand : IEditCommand
     }
 }
 
+public sealed class UpdateEffectCommand : IEditCommand
+{
+    public string Description => $"Update effect {EffectInstanceId}";
+
+    public required TimelineItemId ItemId { get; init; }
+    public required EffectInstanceId EffectInstanceId { get; init; }
+    public required bool Enabled { get; init; }
+    public Dictionary<string, object> Parameters { get; init; } = [];
+
+    private bool _oldEnabled;
+    private Dictionary<string, object>? _oldParameters;
+
+    public EditResult Execute(Sequence sequence)
+    {
+        foreach (var track in sequence.Tracks)
+        {
+            var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
+            if (item == null) continue;
+
+            var effect = item.Effects.FirstOrDefault(e => e.Id == EffectInstanceId);
+            if (effect == null) return EditResult.Fail("Effect not found");
+
+            _oldEnabled = effect.Enabled;
+            _oldParameters = new Dictionary<string, object>(effect.Parameters);
+            effect.Enabled = Enabled;
+            effect.Parameters.Clear();
+            foreach (var pair in Parameters) effect.Parameters[pair.Key] = pair.Value;
+            return EditResult.Ok();
+        }
+
+        return EditResult.Fail(new ItemNotFoundError(ItemId));
+    }
+
+    public EditResult Undo(Sequence sequence)
+    {
+        if (_oldParameters == null) return EditResult.Fail("Nothing to undo");
+
+        foreach (var track in sequence.Tracks)
+        {
+            var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
+            if (item == null) continue;
+
+            var effect = item.Effects.FirstOrDefault(e => e.Id == EffectInstanceId);
+            if (effect == null) return EditResult.Fail("Effect not found");
+
+            effect.Enabled = _oldEnabled;
+            effect.Parameters.Clear();
+            foreach (var pair in _oldParameters) effect.Parameters[pair.Key] = pair.Value;
+            return EditResult.Ok();
+        }
+
+        return EditResult.Fail(new ItemNotFoundError(ItemId));
+    }
+}
+
 public sealed class ReorderEffectCommand : IEditCommand
 {
     public string Description => $"Reorder effect {EffectInstanceId}";
