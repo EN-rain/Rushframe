@@ -1,0 +1,58 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="ea18c849-7b54-4c15-8762-07002562ed4d" name="LENOVO@DESKTOP-0NLB2MR 2026-07-11 23:26:14" runUser="DESKTOP-0NLB2MR\LENOVO" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-07-11T23:26:14.4767990+08:00" queuing="2026-07-11T23:26:14.4767995+08:00" start="2026-07-11T23:26:10.4209527+08:00" finish="2026-07-11T23:26:15.5255028+08:00" />
+  <TestSettings name="default" id="5768ba7d-6bb8-48c1-9011-13f9a9353dd2">
+    <Deployment runDeploymentRoot="LENOVO_DESKTOP-0NLB2MR_2026-07-11_23_26_14" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="9f3fd1e1-c365-46af-a08a-d04095c0695a" testId="aea33033-c02f-c9d3-1db2-cede75b08c48" testName="Rushframe.Media.Tests.FfmpegMediaServiceTests.ExtractAudioAsync_GeneratedVideo_CreatesWav" computerName="DESKTOP-0NLB2MR" duration="00:00:00.4425217" startTime="2026-07-11T23:26:14.9794282+08:00" endTime="2026-07-11T23:26:15.4350376+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9f3fd1e1-c365-46af-a08a-d04095c0695a" />
+    <UnitTestResult executionId="366ab7dd-72da-49ad-9dde-a12b2a0661fb" testId="d36f25ef-c8fc-776d-89b3-5bdca2526e0e" testName="Rushframe.Media.Tests.FfmpegMediaServiceTests.ExportTimelineAsync_WithAudioTrack_ContainsAudioStream" computerName="DESKTOP-0NLB2MR" duration="00:00:01.0809332" startTime="2026-07-11T23:26:13.4035832+08:00" endTime="2026-07-11T23:26:14.4700643+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="366ab7dd-72da-49ad-9dde-a12b2a0661fb" />
+    <UnitTestResult executionId="f31d771e-1480-4dbf-93e5-5713b2a521e1" testId="c0143b05-0a10-6438-d768-69bd5332b658" testName="Rushframe.Media.Tests.FfmpegMediaServiceTests.Derivatives_GeneratedVideo_CreateFiles" computerName="DESKTOP-0NLB2MR" duration="00:00:01.0040681" startTime="2026-07-11T23:26:12.3675662+08:00" endTime="2026-07-11T23:26:13.3855296+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f31d771e-1480-4dbf-93e5-5713b2a521e1" />
+    <UnitTestResult executionId="a542f1c4-667c-4e59-8d5b-60c5844d253f" testId="8e16db4a-f84f-4c1d-70d4-f4ad550648d9" testName="Rushframe.Media.Tests.FfmpegMediaServiceTests.ProbeAsync_GeneratedVideo_ReturnsAudioAndVideoStreams" computerName="DESKTOP-0NLB2MR" duration="00:00:00.2178654" startTime="2026-07-11T23:26:14.4733998+08:00" endTime="2026-07-11T23:26:14.6886684+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a542f1c4-667c-4e59-8d5b-60c5844d253f" />
+    <UnitTestResult executionId="cc751fd1-3538-4109-8da3-4a13729044d2" testId="567cbfb8-032d-b797-46e7-ab85d67bf7a8" testName="Rushframe.Media.Tests.FfmpegMediaServiceTests.GenerateProxyAsync_Cancelled_ThrowsOperationCanceled" computerName="DESKTOP-0NLB2MR" duration="00:00:00.2898977" startTime="2026-07-11T23:26:14.6892077+08:00" endTime="2026-07-11T23:26:14.9791390+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="cc751fd1-3538-4109-8da3-4a13729044d2" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Rushframe.Media.Tests.FfmpegMediaServiceTests.ProbeAsync_GeneratedVideo_ReturnsAudioAndVideoStreams" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.media.tests\bin\debug\net10.0\rushframe.media.tests.dll" id="8e16db4a-f84f-4c1d-70d4-f4ad550648d9">
+      <Execution id="a542f1c4-667c-4e59-8d5b-60c5844d253f" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Media.Tests\bin\Debug\net10.0\Rushframe.Media.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Media.Tests.FfmpegMediaServiceTests" name="ProbeAsync_GeneratedVideo_ReturnsAudioAndVideoStreams" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Media.Tests.FfmpegMediaServiceTests.GenerateProxyAsync_Cancelled_ThrowsOperationCanceled" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.media.tests\bin\debug\net10.0\rushframe.media.tests.dll" id="567cbfb8-032d-b797-46e7-ab85d67bf7a8">
+      <Execution id="cc751fd1-3538-4109-8da3-4a13729044d2" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Media.Tests\bin\Debug\net10.0\Rushframe.Media.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Media.Tests.FfmpegMediaServiceTests" name="GenerateProxyAsync_Cancelled_ThrowsOperationCanceled" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Media.Tests.FfmpegMediaServiceTests.ExtractAudioAsync_GeneratedVideo_CreatesWav" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.media.tests\bin\debug\net10.0\rushframe.media.tests.dll" id="aea33033-c02f-c9d3-1db2-cede75b08c48">
+      <Execution id="9f3fd1e1-c365-46af-a08a-d04095c0695a" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Media.Tests\bin\Debug\net10.0\Rushframe.Media.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Media.Tests.FfmpegMediaServiceTests" name="ExtractAudioAsync_GeneratedVideo_CreatesWav" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Media.Tests.FfmpegMediaServiceTests.ExportTimelineAsync_WithAudioTrack_ContainsAudioStream" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.media.tests\bin\debug\net10.0\rushframe.media.tests.dll" id="d36f25ef-c8fc-776d-89b3-5bdca2526e0e">
+      <Execution id="366ab7dd-72da-49ad-9dde-a12b2a0661fb" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Media.Tests\bin\Debug\net10.0\Rushframe.Media.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Media.Tests.FfmpegMediaServiceTests" name="ExportTimelineAsync_WithAudioTrack_ContainsAudioStream" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Media.Tests.FfmpegMediaServiceTests.Derivatives_GeneratedVideo_CreateFiles" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.media.tests\bin\debug\net10.0\rushframe.media.tests.dll" id="c0143b05-0a10-6438-d768-69bd5332b658">
+      <Execution id="f31d771e-1480-4dbf-93e5-5713b2a521e1" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Media.Tests\bin\Debug\net10.0\Rushframe.Media.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Media.Tests.FfmpegMediaServiceTests" name="Derivatives_GeneratedVideo_CreateFiles" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="aea33033-c02f-c9d3-1db2-cede75b08c48" executionId="9f3fd1e1-c365-46af-a08a-d04095c0695a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d36f25ef-c8fc-776d-89b3-5bdca2526e0e" executionId="366ab7dd-72da-49ad-9dde-a12b2a0661fb" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c0143b05-0a10-6438-d768-69bd5332b658" executionId="f31d771e-1480-4dbf-93e5-5713b2a521e1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8e16db4a-f84f-4c1d-70d4-f4ad550648d9" executionId="a542f1c4-667c-4e59-8d5b-60c5844d253f" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="567cbfb8-032d-b797-46e7-ab85d67bf7a8" executionId="cc751fd1-3538-4109-8da3-4a13729044d2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="5" executed="5" passed="5" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.9)&#xD;
+[xUnit.net 00:00:00.66]   Discovering: Rushframe.Media.Tests&#xD;
+[xUnit.net 00:00:00.73]   Discovered:  Rushframe.Media.Tests&#xD;
+[xUnit.net 00:00:00.77]   Starting:    Rushframe.Media.Tests&#xD;
+[xUnit.net 00:00:03.89]   Finished:    Rushframe.Media.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.IO;
@@ -7,6 +8,7 @@ namespace Rushframe.Desktop.Services;
 
 public sealed class LocalAgentBridgeService : IDisposable
 {
+    private const long MaxRequestBytes = 1_048_576;
     private readonly HttpListener _listener = new();
     private readonly Func<string, JsonElement?, CancellationToken, Task<object>> _handler;
     private CancellationTokenSource? _cts;
@@ -14,6 +16,8 @@ public sealed class LocalAgentBridgeService : IDisposable
 
     public int Port { get; }
     public Uri BaseUri => new($"http://127.0.0.1:{Port}/");
+    public string SessionId { get; } = Guid.NewGuid().ToString("N");
+    public string SessionToken { get; }
 
     public LocalAgentBridgeService(
         Func<string, JsonElement?, CancellationToken, Task<object>> handler,
@@ -21,6 +25,7 @@ public sealed class LocalAgentBridgeService : IDisposable
     {
         _handler = handler;
         Port = port;
+        SessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         _listener.Prefixes.Add(BaseUri.ToString());
     }
 
@@ -80,6 +85,19 @@ public sealed class LocalAgentBridgeService : IDisposable
                 return;
             }
 
+            var path = context.Request.Url?.AbsolutePath.Trim('/').ToLowerInvariant() ?? "";
+            if (path is not ("" or "health") && !IsAuthorized(context.Request))
+            {
+                await WriteJsonAsync(context.Response, new { ok = false, error = "invalid agent session" }, HttpStatusCode.Unauthorized, cancellationToken);
+                return;
+            }
+
+            if (context.Request.ContentLength64 > MaxRequestBytes)
+            {
+                await WriteJsonAsync(context.Response, new { ok = false, error = "request too large" }, HttpStatusCode.RequestEntityTooLarge, cancellationToken);
+                return;
+            }
+
             JsonElement? payload = null;
             if (context.Request.HasEntityBody)
             {
@@ -92,7 +110,6 @@ public sealed class LocalAgentBridgeService : IDisposable
                 }
             }
 
-            var path = context.Request.Url?.AbsolutePath.Trim('/').ToLowerInvariant() ?? "";
             var result = await _handler(path, payload, cancellationToken);
             await WriteJsonAsync(context.Response, result, HttpStatusCode.OK, cancellationToken);
         }
@@ -100,6 +117,23 @@ public sealed class LocalAgentBridgeService : IDisposable
         {
             await WriteJsonAsync(context.Response, new { ok = false, error = ex.Message }, HttpStatusCode.BadRequest, cancellationToken);
         }
+    }
+
+    private bool IsAuthorized(HttpListenerRequest request)
+    {
+        var supplied = request.Headers["X-Rushframe-Session"];
+        if (string.IsNullOrWhiteSpace(supplied))
+        {
+            var authorization = request.Headers["Authorization"];
+            if (authorization?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
+                supplied = authorization[7..].Trim();
+        }
+        if (string.IsNullOrWhiteSpace(supplied)) return false;
+
+        var expectedBytes = Encoding.UTF8.GetBytes(SessionToken);
+        var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
+        return expectedBytes.Length == suppliedBytes.Length
+               && CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes);
     }
 
     private static async Task WriteJsonAsync(

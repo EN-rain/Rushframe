@@ -20,9 +20,11 @@ public sealed class TrimClipCommand : IEditCommand
     {
         var track = sequence.Tracks.FirstOrDefault(t => t.Id == TrackId);
         if (track == null) return EditResult.Fail("Track not found");
+        if (track.Locked) return EditResult.Fail("Track is locked");
 
         var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
         if (item == null) return EditResult.Fail("Item not found");
+        if (item.Locked) return EditResult.Fail("Item is locked");
 
         if (NewStart.HasValue && NewStart.Value.Seconds < 0)
             return EditResult.Fail("Trim start cannot be negative");

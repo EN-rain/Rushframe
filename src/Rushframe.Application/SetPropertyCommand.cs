@@ -20,6 +20,8 @@ public sealed class SetPropertyCommand : Domain.Editing.IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+            if (track.Locked) return Domain.Editing.EditResult.Fail("Track is locked");
+            if (item.Locked) return Domain.Editing.EditResult.Fail("Item is locked");
 
             _oldValue = Getter(item);
             Setter(item, NewValue);

@@ -1,5 +1,6 @@
 param(
     [switch]$Advanced,
+    [switch]$Dev,
     [switch]$Upgrade
 )
 
@@ -15,6 +16,8 @@ if (-not (Test-Path $Python)) {
 & $Python -m pip install --upgrade pip
 $Requirements = if ($Advanced) {
     Join-Path $RepoRoot 'requirements-intelligence-advanced.txt'
+} elseif ($Dev) {
+    Join-Path $RepoRoot 'requirements-intelligence-dev.txt'
 } else {
     Join-Path $RepoRoot 'requirements-intelligence.txt'
 }
@@ -25,6 +28,9 @@ if ($Upgrade) { $Arguments += '--upgrade' }
 
 Write-Host "Rushframe intelligence environment ready: $Python"
 Write-Host "Core analysis: & '$Python' -m rushframe_intelligence --help"
+if ($Dev) {
+    Write-Host "Python tests: & '$Python' -m pytest tests/test_media_intelligence_v2.py"
+}
 if (-not $Advanced) {
     Write-Host "Run again with -Advanced to install OCR, diarization, CLAP and local Qwen support."
 }

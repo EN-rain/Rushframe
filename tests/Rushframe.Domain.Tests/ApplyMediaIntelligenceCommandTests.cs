@@ -114,6 +114,40 @@ public sealed class ApplyMediaIntelligenceCommandTests
     }
 
     [Fact]
+    public void execute_rejects_locked_caption_track_without_partial_marker_changes()
+    {
+        var assetId = MediaAssetId.New();
+        var sequence = new Sequence();
+        var videoTrack = new Track { Kind = TrackKind.Video, Name = "V1" };
+        var captionTrack = new Track { Kind = TrackKind.Text, Name = "AI Captions", Locked = true };
+        var target = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            MediaAssetId = assetId,
+            Duration = MediaTime.FromSeconds(5),
+            SourceDuration = MediaTime.FromSeconds(5),
+        };
+        videoTrack.Items.Add(target);
+        sequence.Tracks.Add(videoTrack);
+        sequence.Tracks.Add(captionTrack);
+
+        var result = new ApplyMediaIntelligenceCommand
+        {
+            TargetItemId = target.Id,
+            Analysis = new MediaIntelligenceAnalysis
+            {
+                MediaAssetId = assetId,
+                Scenes = [new() { SceneId = "scene", Start = MediaTime.Zero, End = MediaTime.FromSeconds(1) }],
+                Transcript = [new() { Start = MediaTime.Zero, End = MediaTime.FromSeconds(1), Text = "caption" }],
+            },
+        }.Execute(sequence);
+
+        Assert.False(result.Success);
+        Assert.Empty(sequence.Markers);
+        Assert.Empty(captionTrack.Items);
+    }
+
+    [Fact]
     public void project_serialization_preserves_analysis_and_generated_links()
     {
         var project = new Project();

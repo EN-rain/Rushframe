@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -13,6 +14,8 @@ using Rushframe.Desktop.Services;
 using Rushframe.Desktop.Timeline;
 using Rushframe.Domain;
 using Rushframe.Domain.Editing;
+using Rushframe.Desktop.Controllers;
+using Rushframe.Desktop.Dialogs;
 using Rushframe.Desktop.Panels;
 using Rushframe.Desktop.Workspace;
 using Rushframe.Infrastructure;
@@ -22,6 +25,7 @@ using Rushframe.Media.Abstractions;
 using Microsoft.Win32;
 using System.Globalization;
 using System.Windows.Threading;
+using System.Windows.Data;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 
@@ -33,8 +37,11 @@ public partial class MainWindow : Window
     private const double MaximumUiScale = 1.15;
     private const double UiScaleStep = 0.1;
 
+    private readonly Stopwatch _startupClock = Stopwatch.StartNew();
+    private readonly string? _startupDiagnosticPath = Environment.GetEnvironmentVariable("RUSHFRAME_STARTUP_LOG");
     private readonly WorkspaceLayoutService _workspaceService;
     private readonly SettingsService _settingsService;
+    private readonly RecentProjectsService _recentProjectsService;
     private readonly IntelligenceBackendService _intelligenceBackend;
     private readonly LocalAgentBridgeService _localAgentBridge;
     private readonly string _appData;
@@ -45,6 +52,9 @@ public partial class MainWindow : Window
     private readonly UndoRedoStack _undoRedo = new();
     private readonly AutosaveService _autosave;
     private readonly ProjectRepository _projectRepo = new();
+    private readonly EditorPerformanceTelemetry _performanceTelemetry = EditorPerformanceTelemetry.Shared;
+    private readonly ProjectSaveCoordinator _saveCoordinator;
+    private readonly ExactPreviewCache _exactPreviewCache;
     private readonly MigrationService _migrationService;
     private readonly FfmpegMediaService _mediaService = new();
     private readonly StabilizationAnalysisService _stabilizationService;
@@ -52,9 +62,11 @@ public partial class MainWindow : Window
     private readonly MediaIntelligenceSearchService _mediaIntelligenceSearchService = new();
     private readonly EffectRegistry _effectRegistry = new();
     private readonly RippleState _rippleState = new();
-    private readonly DispatcherTimer _previewTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    private readonly PreviewFrameScheduler _previewScheduler;
     private TimelineControl? _timeline;
+    private TimelinePlayheadOverlay? _timelinePlayheadOverlay;
     private CopyClipCommand? _clipboard;
+    private List<GroupClipboardItem>? _groupClipboard;
     private int _lastSelectedTrackIndex;
     private TimelineItem? _selectedInspectorItem;
     private TransitionSelection? _selectedTransitionSelection;
@@ -62,39 +74,121 @@ public partial class MainWindow : Window
     private string _mediaSearchText = string.Empty;
     private string? _currentProjectPath;
     private bool _isPreviewSeeking;
+    private readonly PreviewSeekRequestGate _previewSeekRequestGate = new();
     private bool _isPreviewPlaying;
     private MediaAsset? _previewAsset;
     private TimelineItemId? _previewTimelineItemId;
+    private TimelineItem? _previewTimelineItemCache;
     private double? _previewMarkInSeconds;
     private double? _previewMarkOutSeconds;
     private bool _previewFullscreen;
+    private bool _previewWindowPortrait = true;
+    private bool _isTimelineCompositePreview;
+    private bool _timelinePreviewDirty = true;
+    private string? _timelinePreviewPath;
+    private double _timelinePreviewOffsetSeconds;
+    private double _timelinePreviewChunkEndSeconds;
+    private long _timelinePreviewRevision = -1;
+    private bool _isExactPreviewChunkSwitching;
+    private CancellationTokenSource? _timelinePreviewRenderCancellation;
     private readonly List<MediaAsset> _previewHistory = [];
     private bool _suppressInspectorChangeTracking;
-    private bool _suppressTaskTracking;
+    private bool _suppressTimelineSelectionSync;
     private bool _suppressTimelineZoomSliderChange;
     private bool _inspectorDirty;
     private bool _isMediaOperationRunning;
     private bool _projectDirty;
     private bool _allowClose;
+    private bool _isClosingSaveInProgress;
     private CancellationTokenSource? _operationCancellation;
     private readonly Dictionary<string, TextBox> _effectParameterEditors = [];
-    private readonly List<AgentAuditEntry> _agentAuditLog = [];
+    private readonly Dictionary<MediaAssetId, IReadOnlyList<float>> _waveformPeaks = [];
+    private readonly Dictionary<MediaAssetId, MediaAsset> _mediaById = [];
+    private readonly Dictionary<MediaAssetId, string> _mediaAssetNames = [];
+    private readonly ObservableCollection<MediaListItem> _mediaItems = [];
+    private readonly Dictionary<MediaAssetId, MediaListItem> _mediaItemsById = [];
+    private readonly ThumbnailCache _thumbnailCache = new();
+    private readonly DispatcherTimer _mediaSearchDebounce = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    private ICollectionView? _mediaItemsView;
+    private CancellationTokenSource? _thumbnailLoadCancellation;
+    private bool _fontsLoaded;
+    private string[] _systemFontNames = [];
+    private readonly List<InspectorFontChoice> _inspectorFontChoices = [];
+    private bool _optionalCapabilitiesLoaded;
+    private readonly AgentAuditLogService _agentAuditLogService;
+    private readonly List<AgentAuditRecord> _agentAuditLog = [];
+    private readonly ExportController _exportController;
+    private readonly AgentEditCommandFactory _agentEditCommandFactory = new();
+    private readonly AgentEditPlanCompiler _agentEditPlanCompiler;
+    private readonly ExternalCompositionService _externalCompositionService;
+    private readonly RenderReceiptService _renderReceiptService;
+    private readonly EditorActionRegistry _actionRegistry = new();
+    private readonly CreativeAssetPackService _creativeAssetPackService = new();
+    private readonly ExtensionManifestService _extensionManifestService = new();
+    private readonly List<CreativeAssetProviderManifest> _installedAssetProviders = [];
+    private readonly List<ExtensionManifest> _installedExtensions = [];
+
     public MainWindow()
     {
-        _appData = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Rushframe");
+        WriteStartupDiagnostic("constructor.begin");
+        var qaAppDataOverride = Environment.GetEnvironmentVariable("RUSHFRAME_QA_APPDATA");
+        _appData = !string.IsNullOrWhiteSpace(qaAppDataOverride)
+            ? Path.GetFullPath(qaAppDataOverride)
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Rushframe");
+        _exactPreviewCache = new ExactPreviewCache(Path.Combine(_appData, "preview-cache", "chunks"));
         _workspaceService = new WorkspaceLayoutService(_appData);
         _settingsService = new SettingsService(_appData);
+        _recentProjectsService = new RecentProjectsService(_settingsService);
         _layout = _workspaceService.Load();
         _settings = _settingsService.Load("editor", new EditorSettings());
         _intelligenceBackend = new IntelligenceBackendService(Math.Clamp(_settings.IntelligenceBackendPort, 1024, 65535));
         _localAgentBridge = new LocalAgentBridgeService(HandleLocalAgentBridgeRequestAsync);
+        _agentEditPlanCompiler = new AgentEditPlanCompiler(_agentEditCommandFactory);
+        _externalCompositionService = new ExternalCompositionService(_mediaService);
+        _renderReceiptService = new RenderReceiptService(_mediaService);
+        _agentAuditLogService = new AgentAuditLogService(Path.Combine(_appData, "audit", "agent-audit.jsonl"));
+        _agentAuditLog.AddRange(_agentAuditLogService.ReadRecent(200));
         _autosave = new AutosaveService(Path.Combine(_appData, "autosave"));
+        _saveCoordinator = new ProjectSaveCoordinator(_projectRepo, _autosave, _performanceTelemetry);
+        _saveCoordinator.SaveCompleted += (_, args) => Dispatcher.BeginInvoke(() =>
+        {
+            if (args.IsAutosave) ShowAutosaveSaved(args.Path);
+        });
+        _saveCoordinator.SaveFailed += (_, error) => Dispatcher.BeginInvoke(() =>
+            AutosaveStatusText.Text = $"Autosave failed: {error.Message}");
         _migrationService = new MigrationService(Path.Combine(_appData, "backups"));
         _stabilizationService = new StabilizationAnalysisService(Path.Combine(_appData, "analysis", "stabilization"));
+        WriteStartupDiagnostic("services.created");
 
+        WriteStartupDiagnostic("initialize_component.begin");
         InitializeComponent();
+        InitializePanelDocking();
+        InitializeInspectorUtilityTabs();
+        WriteStartupDiagnostic("initialize_component.end");
+        _performanceTelemetry.RecordStartupMilestone("shell_initialized", _startupClock.Elapsed);
+        _previewScheduler = new PreviewFrameScheduler(
+            OnPreviewFrameTick,
+            UpdatePreviewTransportDisplay,
+            GetPreviewTargetFramesPerSecond);
+        MediaList.ItemsSource = _mediaItems;
+        _mediaItemsView = CollectionViewSource.GetDefaultView(_mediaItems);
+        _mediaItemsView.Filter = ShouldShowMediaItem;
+        _mediaSearchDebounce.Tick += (_, _) =>
+        {
+            _mediaSearchDebounce.Stop();
+            RefreshMediaView();
+        };
+        MediaList.AddHandler(
+            ScrollViewer.ScrollChangedEvent,
+            new ScrollChangedEventHandler((_, _) => QueueVisibleMediaThumbnails()));
+        FontFamilyCombo.DropDownOpened += async (_, _) => await EnsureFontsLoadedAsync();
+        _actionRegistry.ApplyInputBindings(this, _settings.Keybindings);
+        InitializePreviewInteraction();
+        InitializeGlobalFunctionSearch();
+        InitializeAutomationPanels();
+        _exportController = new ExportController(this, _mediaService);
         SourceInitialized += (_, _) =>
         {
             if (PresentationSource.FromVisual(this) is HwndSource source)
@@ -110,6 +204,9 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
+            WriteStartupDiagnostic("window.loaded");
+            _performanceTelemetry.RecordStartupMilestone("window_loaded", _startupClock.Elapsed);
+            ScheduleQaAutoCloseIfRequested();
             ConstrainWindowToWorkingArea();
             UpdateResponsiveLayout();
             try
@@ -120,8 +217,13 @@ public partial class MainWindow : Window
             {
                 StatusText.Text = $"Local agent bridge unavailable: {ex.Message}";
             }
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            await LoadOptionalCapabilitiesAsync();
+            _performanceTelemetry.RecordStartupMilestone("optional_capabilities_loaded", _startupClock.Elapsed);
+            _performanceTelemetry.RecordStartupMilestone("empty_project_ready", _startupClock.Elapsed);
             if (_settings.StartIntelligenceBackend)
                 await StartIntelligenceBackendAsync();
+            _performanceTelemetry.RecordStartupMilestone("startup_complete", _startupClock.Elapsed);
         };
         SizeChanged += (_, _) => UpdateResponsiveLayout();
         StateChanged += (_, _) =>
@@ -141,21 +243,12 @@ public partial class MainWindow : Window
         CloseWindowButton.Click += (_, _) => Close();
         CancelOperationButton.Click += (_, _) => _operationCancellation?.Cancel();
         SettingsButton.Click += (_, _) => ShowSettingsDialog();
+        PreviewOrientationButton.Click += (_, _) => TogglePreviewWindowOrientation();
         McpStatusButton.Click += (_, _) => ShowLocalAgentStatusDialog();
+        OpenRecentMenu.SubmenuOpened += (_, _) => PopulateOpenRecentMenu();
+        RecoverLatestAutosaveMenuItem.Click += async (_, _) => await RecoverLatestAutosaveAsync();
         ConfigureTrackHeaderMenu();
 
-        SideMediaButton.Click += (_, _) =>
-        {
-            if (_layout.IsPanelOpen(PanelId.Media))
-            {
-                TogglePanel(PanelId.Media);
-                return;
-            }
-
-            TogglePanel(PanelId.Media);
-            SetMediaFilter(null);
-            MediaSearchBox.Focus();
-        };
         ApplyEditorSettings();
         RippleToggle.Click += (_, _) => _rippleState.Enabled = RippleToggle.IsChecked ?? false;
         SnapToggle.Click += (_, _) =>
@@ -174,9 +267,11 @@ public partial class MainWindow : Window
             var hasSelection = MediaList.SelectedItem != null;
             AddToTimelineButton.IsEnabled = hasSelection;
             PreviewSelectedMediaButton.IsEnabled = hasSelection;
+            UpdateMediaIntelligenceActionState();
             CommandManager.InvalidateRequerySuggested();
         };
         AddToTimelineButton.Click += (_, _) => AddSelectedMediaToTimeline();
+        CreativeAssetsButton.Click += async (_, _) => await ShowCreativeAssetsAsync();
         PreviewSelectedMediaButton.Click += (_, _) => PreviewSelectedMedia();
         RunMediaIntelligenceButton.Click += async (_, _) => await RunMediaIntelligenceAsync();
         ApplyMediaIntelligenceButton.Click += async (_, _) => await ApplyCurrentMediaIntelligenceToTimelineAsync();
@@ -185,17 +280,27 @@ public partial class MainWindow : Window
         FindHooksButton.Click += (_, _) => SearchMediaContext(findHooks: true);
         MediaContextSearchBox.KeyDown += (_, args) =>
         {
-            if (args.Key != Key.Enter) return;
+            if (args.Key != Key.Enter || !SearchMediaContextButton.IsEnabled) return;
             SearchMediaContext(findHooks: false);
             args.Handled = true;
         };
+        MediaIntelligenceTab.SizeChanged += (_, _) => UpdateMediaIntelligenceResponsiveLayout();
+        AnalyzeTranscriptToggle.Checked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeTranscriptToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeMusicToggle.Checked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeMusicToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeGeminiToggle.Checked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeGeminiToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        UpdateMediaIntelligenceFeatureDependencies();
+        UpdateMediaIntelligenceActionState();
         MediaSearchBox.TextChanged += (_, _) =>
         {
             _mediaSearchText = MediaSearchBox.Text.Trim();
             MediaSearchHint.Visibility = string.IsNullOrEmpty(MediaSearchBox.Text)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
-            RefreshMediaList();
+            _mediaSearchDebounce.Stop();
+            _mediaSearchDebounce.Start();
         };
         MediaSearchBox.KeyDown += (_, args) =>
         {
@@ -208,12 +313,26 @@ public partial class MainWindow : Window
         ImageFilterButton.Click += (_, _) => SetMediaFilter(MediaKind.Image);
         AudioFilterButton.Click += (_, _) => SetMediaFilter(MediaKind.Audio);
 
-        PreviewPlayButton.Click += (_, _) => PlayPreview();
+        PreviewPlayButton.Click += async (_, _) => await PlayPreviewAsync();
         PreviewPauseButton.Click += (_, _) => PausePreview();
         PreviewStopButton.Click += (_, _) => StopPreview();
         PreviewPlayer.MediaOpened += (_, _) => OnPreviewMediaOpened();
         PreviewPlayer.MediaEnded += (_, _) =>
         {
+            if (_isTimelineCompositePreview && _project.MainSequence is { } sequence)
+            {
+                if (_timelinePreviewChunkEndSeconds < sequence.Duration.Seconds - 0.001)
+                {
+                    _ = SwitchExactPreviewChunkAsync(_timelinePreviewChunkEndSeconds, resumePlayback: true);
+                    return;
+                }
+                if (PreviewLoopToggle.IsChecked == true)
+                {
+                    _ = SwitchExactPreviewChunkAsync(0, resumePlayback: true);
+                    return;
+                }
+            }
+
             if (PreviewLoopToggle.IsChecked == true)
             {
                 PreviewPlayer.Position = TimeSpan.FromSeconds(_previewMarkInSeconds ?? 0);
@@ -231,11 +350,21 @@ public partial class MainWindow : Window
             SetPreviewControlsEnabled(false);
             PreviewSourceNameText.Text = $"Preview failed: {args.ErrorException?.Message ?? "unknown error"}";
         };
-        PreviewSeekSlider.PreviewMouseLeftButtonDown += (_, _) => _isPreviewSeeking = true;
+        PreviewSeekSlider.PreviewMouseLeftButtonDown += (_, _) =>
+        {
+            _isPreviewSeeking = true;
+            _previewSeekRequestGate.BeginPointerSeek();
+        };
         PreviewSeekSlider.PreviewMouseLeftButtonUp += (_, _) =>
         {
             _isPreviewSeeking = false;
+            _previewSeekRequestGate.CompletePointerSeek();
             SeekPreview(PreviewSeekSlider.Value);
+        };
+        PreviewSeekSlider.ValueChanged += (_, args) =>
+        {
+            if (!_previewSeekRequestGate.ShouldSeekFromSliderValueChanged()) return;
+            SeekPreview(args.NewValue);
         };
         PreviewPreviousFrameButton.Click += (_, _) => StepPreviewFrame(-1);
         PreviewNextFrameButton.Click += (_, _) => StepPreviewFrame(1);
@@ -244,20 +373,32 @@ public partial class MainWindow : Window
         PreviewClearMarksButton.Click += (_, _) => ClearPreviewMarks();
         PreviewInsertButton.Click += (_, _) => AddPreviewRangeToTimeline(overwrite: false);
         PreviewOverwriteButton.Click += (_, _) => AddPreviewRangeToTimeline(overwrite: true);
-        PreviewMuteToggle.Checked += (_, _) => PreviewPlayer.IsMuted = true;
-        PreviewMuteToggle.Unchecked += (_, _) => PreviewPlayer.IsMuted = false;
-        PreviewVolumeSlider.ValueChanged += (_, _) => PreviewPlayer.Volume = PreviewVolumeSlider.Value;
-        PreviewSpeedCombo.SelectionChanged += (_, _) => ApplyPreviewSpeed();
-        PreviewZoomCombo.SelectionChanged += (_, _) => ApplyPreviewZoom();
-        PreviewGuidesToggle.Checked += (_, _) => PreviewGuidesOverlay.Visibility = Visibility.Visible;
-        PreviewGuidesToggle.Unchecked += (_, _) => PreviewGuidesOverlay.Visibility = Visibility.Collapsed;
-        PreviewSnapshotButton.Click += (_, _) => SavePreviewSnapshot();
-        PreviewFullscreenButton.Click += (_, _) => TogglePreviewFullscreen();
-        PreviewRecentCombo.SelectionChanged += (_, _) =>
+        PreviewMuteToggle.Checked += (_, _) =>
         {
-            if (PreviewRecentCombo.SelectedItem is MediaAsset asset && asset != _previewAsset)
-                PreviewAsset(asset);
+            PreviewPlayer.IsMuted = true;
+            ApplyRealtimeAudioSettings();
         };
+        PreviewMuteToggle.Unchecked += (_, _) =>
+        {
+            PreviewPlayer.IsMuted = false;
+            ApplyRealtimeAudioSettings();
+        };
+        PreviewVolumeSlider.ValueChanged += (_, _) =>
+        {
+            PreviewPlayer.Volume = PreviewVolumeSlider.Value;
+            ApplyRealtimeAudioSettings();
+        };
+        PreviewSpeedButton.Click += (_, _) => CyclePreviewSpeed();
+        PreviewZoomButton.Click += (_, _) => CyclePreviewZoom();
+        PreviewGuidesToggle.Checked += (_, _) =>
+        {
+            PreviewGuidesOverlay.Visibility = Visibility.Visible;
+            RefreshPreviewGuidesOverlay();
+        };
+        PreviewGuidesToggle.Unchecked += (_, _) => PreviewGuidesOverlay.Visibility = Visibility.Collapsed;
+        PreviewCanvasSettingsButton.Click += (_, _) => OpenCanvasSettings();
+        PreviewSnapshotButton.Click += async (_, _) => await SavePreviewSnapshotAsync();
+        PreviewFullscreenButton.Click += (_, _) => TogglePreviewFullscreen();
         PreviewTimeBox.KeyDown += (_, args) =>
         {
             if (args.Key != Key.Enter) return;
@@ -274,15 +415,15 @@ public partial class MainWindow : Window
             args.Handled = true;
         };
         PreviewKeyDown += OnPreviewKeyboardShortcut;
-        _previewTimer.Tick += (_, _) => UpdatePreviewProgress();
-        _previewTimer.Start();
         SetPreviewControlsEnabled(false);
 
         ApplyInspectorButton.Click += (_, _) => ApplyInspectorSettings();
         ResetInspectorButton.Click += (_, _) => ResetInspectorEdits();
+        OpenAnimationEditorButton.Click += (_, _) => OpenAnimationEditor();
         AddEffectButton.Click += (_, _) => AddSelectedEffect();
         EffectCombo.SelectionChanged += (_, _) =>
-            AddEffectButton.IsEnabled = _selectedInspectorItem != null && EffectCombo.SelectedItem != null;
+            AddEffectButton.IsEnabled = CanEditSelectedEffects()
+                && EffectCombo.SelectedItem != null;
         EffectList.SelectionChanged += (_, _) => UpdateSelectedEffectEditor();
         EffectRemoveButton.Click += (_, _) => RemoveSelectedEffect();
         EffectMoveUpButton.Click += (_, _) => MoveSelectedEffect(-1);
@@ -296,31 +437,17 @@ public partial class MainWindow : Window
         BindColorSlider(BrightnessSlider, BrightnessBox);
         BindColorSlider(ContrastSlider, ContrastBox);
         BindColorSlider(SaturationSlider, SaturationBox);
-        CampaignDescriptionBox.TextChanged += (_, _) =>
-        {
-            if (_suppressTaskTracking) return;
-            _project.CampaignDescription = CampaignDescriptionBox.Text;
-            MarkProjectDirty("Campaign brief modified");
-        };
-        AddTaskButton.Click += (_, _) => AddCampaignTask();
-        NewTaskBox.KeyDown += (_, args) =>
-        {
-            if (args.Key != Key.Enter) return;
-            AddCampaignTask();
-            args.Handled = true;
-        };
-        TaskList.AddHandler(CheckBox.ClickEvent, new RoutedEventHandler((_, _) => MarkProjectDirty("Campaign task modified")));
         UpdateMediaFilterButtons();
-        RefreshTasksPanel();
 
+        WriteStartupDiagnostic("editor_layout.begin");
         BuildPanelsMenu();
         ApplyLayout();
         InitTimeline();
         ApplyEditorSettings();
-        RestoreLatestAutosaveIfAvailable();
-
         RestartAutosave();
+        WriteStartupDiagnostic("editor_layout.end");
 
+        CommandBindings.Add(new CommandBinding(EditorCommands.NewProject, NewProject_Executed));
         CommandBindings.Add(new CommandBinding(EditorCommands.OpenProject, OpenProject_Executed));
         CommandBindings.Add(new CommandBinding(EditorCommands.SaveProject, SaveProject_Executed));
         CommandBindings.Add(new CommandBinding(EditorCommands.ImportMedia, ImportMedia_Executed, MediaOperation_CanExecute));
@@ -348,30 +475,100 @@ public partial class MainWindow : Window
         Closing += OnWindowClosing;
         Closed += (_, _) =>
         {
-            _previewTimer.Stop();
+            _previewScheduler.Dispose();
+            _mediaSearchDebounce.Stop();
+            _thumbnailLoadCancellation?.Cancel();
+            _thumbnailLoadCancellation?.Dispose();
+            _thumbnailCache.Dispose();
             PreviewPlayer.Stop();
             _operationCancellation?.Cancel();
             _operationCancellation?.Dispose();
-            _autosave.StopBackground();
+            _timelinePreviewRenderCancellation?.Cancel();
+            _timelinePreviewRenderCancellation?.Dispose();
+            _timelinePlayheadOverlay?.Dispose();
+            _saveCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _autosave.StopBackgroundAsync().GetAwaiter().GetResult();
             _intelligenceBackend.Dispose();
             _localAgentBridge.Dispose();
+            if (_performanceTelemetry.DetailedEnabled)
+            {
+                _performanceTelemetry.WriteSnapshot(Path.Combine(
+                    _appData,
+                    "performance",
+                    $"session-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json"));
+            }
             SaveLayout();
         };
+        WriteStartupDiagnostic("constructor.end");
+    }
+
+    private void WriteStartupDiagnostic(string milestone)
+    {
+        if (string.IsNullOrWhiteSpace(_startupDiagnosticPath)) return;
+        try
+        {
+            var path = Path.GetFullPath(_startupDiagnosticPath);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+            File.AppendAllText(
+                path,
+                $"{DateTime.UtcNow:O}|{_startupClock.Elapsed.TotalMilliseconds:0.###}|{milestone}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Startup diagnostics must never affect normal application startup.
+        }
+    }
+
+    private void ScheduleQaAutoCloseIfRequested()
+    {
+        if (!int.TryParse(
+                Environment.GetEnvironmentVariable("RUSHFRAME_QA_AUTOCLOSE_MS"),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var milliseconds)
+            || milliseconds is < 1000 or > 300_000)
+            return;
+
+        WriteStartupDiagnostic($"qa_autoclose.scheduled|milliseconds={milliseconds}");
+        _ = CloseAfterDelayForQaAsync(milliseconds);
+    }
+
+    private async Task CloseAfterDelayForQaAsync(int milliseconds)
+    {
+        await Task.Delay(milliseconds);
+        await Dispatcher.InvokeAsync(() =>
+        {
+            WriteStartupDiagnostic("qa_autoclose.executing");
+            _allowClose = true;
+            Close();
+        }, DispatcherPriority.Send);
     }
 
     private void InitTimeline()
     {
-        _timeline = new TimelineControl();
-        _timeline.Sequence = _project.MainSequence;
+        _timeline = new TimelineControl
+        {
+            Sequence = _project.MainSequence,
+            ProjectRevision = _project.Revision,
+        };
+        RebuildMediaIndexes();
         _timeline.AssetNameResolver = assetId =>
-            Path.GetFileName(_project.MediaLibrary.FirstOrDefault(asset => asset.Id == assetId)?.OriginalPath)
-            ?? "Media";
+            _mediaAssetNames.TryGetValue(assetId, out var name) ? name : "Media";
+        _timeline.AssetWaveformResolver = ResolveWaveformPeaks;
         _timeline.ClipContextMenu = (ContextMenu)FindResource("TimelineClipContextMenu");
         _timeline.TrackHeaderContextMenu = (ContextMenu)FindResource("TrackHeaderContextMenu");
         _timeline.SnapEnabled = SnapToggle.IsChecked ?? true;
 
         _timeline.ClipSelected += (_, item) =>
         {
+            if (_suppressTimelineSelectionSync) return;
+            if (!TryResolvePendingInspectorChanges())
+            {
+                RestoreInspectorTimelineSelection();
+                return;
+            }
+
             _contextTrackIndex = item != null ? _timeline.SelectedTrackIndex : -1;
             if (item != null && _timeline.SelectedTrackIndex >= 0)
                 _lastSelectedTrackIndex = _timeline.SelectedTrackIndex;
@@ -379,15 +576,21 @@ public partial class MainWindow : Window
             _selectedInspectorItem = item;
             if (item != null) _selectedTransitionSelection = null;
             UpdateInspector(item);
-            if (item != null) PreviewTimelineItem(item);
+            UpdatePreviewInteractionOverlay(item);
+            if (item != null) _ = PreviewTimelineItemAsync(item);
             CommandManager.InvalidateRequerySuggested();
         };
         _timeline.TransitionSelected += (_, selection) => SelectTransition(selection);
-        _timeline.PlayPauseRequested += (_, _) => TogglePreviewPlayback();
+        _timeline.PlayheadMoved += (_, _) => SeekPreviewToTimelinePlayhead();
+        _timeline.PlayPauseRequested += async (_, _) => await TogglePreviewPlaybackAsync();
+        _timeline.MarkerEditRequested += (_, marker) => EditMarker(marker);
         _timeline.TrackHeaderContextRequested += (_, trackIndex) => PrepareTrackHeaderContextMenu(trackIndex);
         _timeline.DeleteSelectedClipRequested += (_, _) => DeleteSelectedClip();
         _timeline.ClipMoveRequested += (_, args) => MoveClip(args);
         _timeline.ClipTrimRequested += (_, args) => TrimClip(args);
+        _timeline.ClipVolumeRequested += (_, args) => SetClipVolume(args);
+        _timeline.GroupMoveRequested += (_, args) => MoveClipGroup(args);
+        _timeline.GroupTrimRequested += (_, args) => TrimClipGroup(args);
         _timeline.ZoomScaleChanged += (_, scale) =>
         {
             var sliderValue = Math.Clamp(scale, ZoomSlider.Minimum, ZoomSlider.Maximum);
@@ -404,7 +607,11 @@ public partial class MainWindow : Window
             }
         };
 
-        TimelineHost.Content = _timeline;
+        var timelineLayers = new Grid();
+        timelineLayers.Children.Add(_timeline);
+        _timelinePlayheadOverlay = new TimelinePlayheadOverlay(_timeline);
+        timelineLayers.Children.Add(_timelinePlayheadOverlay);
+        TimelineHost.Content = timelineLayers;
         RefreshMediaList();
         EffectCombo.ItemsSource = _effectRegistry.GetAll();
         TransitionKindCombo.ItemsSource = Enum.GetValues<TransitionKind>();
@@ -413,32 +620,43 @@ public partial class MainWindow : Window
 
     private void ConfigureTrackHeaderMenu()
     {
-        var menu = (ContextMenu)FindResource("TrackHeaderContextMenu");
-        ((MenuItem)menu.Items[0]).Click += (_, _) => RenameContextTrack();
-        ((MenuItem)menu.Items[1]).Click += (_, _) => ExecuteForContextTrack(track => new DuplicateTrackCommand { TrackId = track.Id });
-        ((MenuItem)menu.Items[3]).Click += (_, _) => ExecuteForContextTrack(track => new ToggleTrackMuteCommand { TrackId = track.Id });
-        ((MenuItem)menu.Items[4]).Click += (_, _) => ExecuteForContextTrack(track => new ToggleTrackSoloCommand { TrackId = track.Id });
-        ((MenuItem)menu.Items[5]).Click += (_, _) => ExecuteForContextTrack(track => new ToggleTrackLockCommand { TrackId = track.Id });
-        ((MenuItem)menu.Items[7]).Click += (_, _) => DeleteContextTrack();
+        if (FindResource("TrackHeaderContextMenu") is not ContextMenu menu) return;
+        var rename = FindTrackMenuItem(menu, "Rename Track");
+        var duplicate = FindTrackMenuItem(menu, "Duplicate Track");
+        var mute = FindTrackMenuItem(menu, "Mute Track");
+        var solo = FindTrackMenuItem(menu, "Solo Track");
+        var @lock = FindTrackMenuItem(menu, "Lock Track");
+        var delete = FindTrackMenuItem(menu, "Delete Track");
+        if (rename == null || duplicate == null || mute == null || solo == null || @lock == null || delete == null)
+            return;
+
+        rename.Click += (_, _) => RenameContextTrack();
+        duplicate.Click += (_, _) => ExecuteForContextTrack(track => new DuplicateTrackCommand { TrackId = track.Id });
+        mute.Click += (_, _) => ExecuteForContextTrack(track => new ToggleTrackMuteCommand { TrackId = track.Id });
+        solo.Click += (_, _) => ExecuteForContextTrack(track => new ToggleTrackSoloCommand { TrackId = track.Id });
+        @lock.Click += (_, _) => ExecuteForContextTrack(track => new ToggleTrackLockCommand { TrackId = track.Id });
+        delete.Click += (_, _) => DeleteContextTrack();
     }
 
     private void PrepareTrackHeaderContextMenu(int trackIndex)
     {
         _contextTrackIndex = trackIndex;
         var track = GetContextTrack();
-        var menu = (ContextMenu)FindResource("TrackHeaderContextMenu");
+        if (FindResource("TrackHeaderContextMenu") is not ContextMenu menu) return;
         if (track == null)
         {
             foreach (var item in menu.Items.OfType<MenuItem>()) item.IsEnabled = false;
             return;
         }
 
-        var rename = (MenuItem)menu.Items[0];
-        var duplicate = (MenuItem)menu.Items[1];
-        var mute = (MenuItem)menu.Items[3];
-        var solo = (MenuItem)menu.Items[4];
-        var @lock = (MenuItem)menu.Items[5];
-        var delete = (MenuItem)menu.Items[7];
+        var rename = FindTrackMenuItem(menu, "Rename Track");
+        var duplicate = FindTrackMenuItem(menu, "Duplicate Track");
+        var mute = FindTrackMenuItem(menu, "Mute Track");
+        var solo = FindTrackMenuItem(menu, "Solo Track");
+        var @lock = FindTrackMenuItem(menu, "Lock Track");
+        var delete = FindTrackMenuItem(menu, "Delete Track");
+        if (rename == null || duplicate == null || mute == null || solo == null || @lock == null || delete == null)
+            return;
 
         rename.IsEnabled = true;
         duplicate.IsEnabled = true;
@@ -450,6 +668,10 @@ public partial class MainWindow : Window
         solo.IsChecked = track.Solo;
         @lock.IsChecked = track.Locked;
     }
+
+    private static MenuItem? FindTrackMenuItem(ContextMenu menu, string header) =>
+        menu.Items.OfType<MenuItem>().FirstOrDefault(item =>
+            string.Equals(item.Header?.ToString(), header, StringComparison.Ordinal));
 
     private Track? GetContextTrack()
     {
@@ -576,13 +798,16 @@ public partial class MainWindow : Window
     {
         foreach (var panel in PanelRegistry.All)
         {
+            if (panel.Id == PanelId.RenderQueue)
+                PanelsMenu.Items.Add(new Separator());
+
             var item = new MenuItem
             {
                 Header = panel.Title,
                 IsCheckable = true,
                 IsChecked = panel.CanClose ? _layout.IsPanelOpen(panel.Id) : true,
                 IsEnabled = panel.CanClose,
-                ToolTip = panel.CanClose ? null : "The timeline is always available.",
+                ToolTip = panel.CanClose ? null : $"{panel.Title} is always available.",
                 Tag = panel.Id,
             };
             if (panel.CanClose) item.Click += PanelMenuItem_Click;
@@ -606,11 +831,25 @@ public partial class MainWindow : Window
     {
         if (PanelRegistry.Find(panelId)?.CanClose == false) return;
         var current = _layout.IsPanelOpen(panelId);
-        _layout = _layout.WithPanelToggled(panelId, !current);
-        foreach (MenuItem item in PanelsMenu.Items)
-            if (item.Tag is PanelId id && id == panelId) item.IsChecked = !current;
+        var opening = !current;
+        if (!opening && !CanClosePrimaryPanelWithoutEmptyCells(panelId))
+        {
+            var utilitiesOpen = GetUtilityPanelEntries().Any(entry => _layout.IsPanelOpen(entry.Id));
+            StatusText.Text = panelId == PanelId.Inspector && utilitiesOpen
+                ? "Inspector must remain open because utility tabs cannot fit in a separate window at this size."
+                : "That window cannot close because it would leave an unusable empty grid area.";
+            SynchronizePanelMenuChecks();
+            return;
+        }
+        _layout = _layout.WithPanelToggled(panelId, opening);
+        foreach (var item in PanelsMenu.Items.OfType<MenuItem>())
+            if (item.Tag is PanelId id && id == panelId) item.IsChecked = opening;
         ApplyLayout();
+        if (opening && IsUtilityPanel(panelId) && GetUtilityInspectorTab(panelId) is { } tab)
+            tab.IsSelected = true;
+        UpdateInspectorTabControls();
         UpdateMediaFilterButtons();
+        SaveLayout();
     }
 
     private void EnsureMediaPanelOpen()
@@ -624,75 +863,129 @@ public partial class MainWindow : Window
         var mediaOpen = _layout.IsPanelOpen(PanelId.Media);
         var previewOpen = _layout.IsPanelOpen(PanelId.Preview);
         var inspectorOpen = _layout.IsPanelOpen(PanelId.Inspector);
-        var tasksOpen = _layout.IsPanelOpen(PanelId.Tasks);
         var renderQueueOpen = _layout.IsPanelOpen(PanelId.RenderQueue);
         var intelligenceOpen = _layout.IsPanelOpen(PanelId.MediaIntelligence);
-        var lowerRightOpen = tasksOpen || renderQueueOpen || intelligenceOpen;
-        var rightColumnOpen = inspectorOpen || lowerRightOpen;
-        var anyTopPanelOpen = mediaOpen || previewOpen;
+        var workflowOpen = _layout.IsPanelOpen(PanelId.ProductionWorkflow);
+        var transcriptOpen = _layout.IsPanelOpen(PanelId.TranscriptEditor);
+        var variantsOpen = _layout.IsPanelOpen(PanelId.OutputVariants);
+        var compositionsOpen = _layout.IsPanelOpen(PanelId.GeneratedCompositions);
+        var activityOpen = renderQueueOpen || intelligenceOpen || workflowOpen || transcriptOpen || variantsOpen || compositionsOpen;
 
-        var compactWidth = ActualWidth > 0 && ActualWidth < 1180;
-        var spaciousWidth = ActualWidth >= 1500;
-        var mediaWidth = compactWidth ? 320 : spaciousWidth ? 410 : 370;
-        var inspectorWidth = compactWidth ? 270 : spaciousWidth ? 330 : 300;
-
-        MediaBorder.Visibility = Visibility.Visible;
-        MediaSplitter.Visibility = Vis(mediaOpen);
-        MediaColumn.Width = mediaOpen ? new GridLength(mediaWidth) : new GridLength(58);
-        MediaSplitterColumn.Width = mediaOpen ? new GridLength(4) : new GridLength(0);
-        AssetPanelColumn.Width = mediaOpen ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
-        AssetPanelContent.Visibility = Vis(mediaOpen);
-
-        PreviewBorder.Visibility = Vis(previewOpen);
-
-        InspectorBorder.Visibility = Vis(inspectorOpen);
-        InspectorSplitter.Visibility = Vis(rightColumnOpen);
-        InspectorColumn.Width = rightColumnOpen ? new GridLength(inspectorWidth) : new GridLength(0);
-        InspectorSplitterColumn.Width = rightColumnOpen ? new GridLength(4) : new GridLength(0);
-        RightInspectorRow.Height = inspectorOpen ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
-
-        TasksBorder.Visibility = Vis(lowerRightOpen);
-        TasksTab.Visibility = Vis(tasksOpen);
         RenderQueueTab.Visibility = Vis(renderQueueOpen);
         MediaIntelligenceTab.Visibility = Vis(intelligenceOpen);
-        RightTasksRow.Height = lowerRightOpen
-            ? inspectorOpen ? new GridLength(270) : new GridLength(1, GridUnitType.Star)
-            : new GridLength(0);
+        ProductionWorkflowTab.Visibility = Vis(workflowOpen);
+        TranscriptEditorTab.Visibility = Vis(transcriptOpen);
+        OutputVariantsTab.Visibility = Vis(variantsOpen);
+        GeneratedCompositionsTab.Visibility = Vis(compositionsOpen);
+        UpdateUtilityPanelHosting(
+            _previewWindowPortrait,
+            mediaOpen,
+            previewOpen,
+            inspectorOpen,
+            activityOpen);
+        if (!inspectorOpen && activityOpen && !_utilityWindowSeparate)
+        {
+            inspectorOpen = true;
+            _layout = _layout.WithPanelToggled(PanelId.Inspector, true);
+            SynchronizePanelMenuChecks();
+            SaveLayout();
+            StatusText.Text = "Inspector restored to host utility tabs at this window size.";
+        }
+        var inspectorWindowOpen = inspectorOpen || (activityOpen && !_utilityWindowSeparate);
+        var visiblePrimaryPanels = GetVisiblePrimaryPanels(mediaOpen, previewOpen, inspectorWindowOpen);
+        ResolveEffectivePrimaryAreas(_previewWindowPortrait, visiblePrimaryPanels);
+        ApplyAdaptiveGridPlacements(_previewWindowPortrait);
+        if (_utilityWindowSeparate)
+            PlaceUtilityWindowInGrid(_utilityWindowArea);
 
-        if (tasksOpen && TasksTab.IsSelected == false && !renderQueueOpen && !intelligenceOpen)
-            TasksTab.IsSelected = true;
-        else if (renderQueueOpen && RenderQueueTab.IsSelected == false && !tasksOpen && !intelligenceOpen)
-            RenderQueueTab.IsSelected = true;
-        else if (intelligenceOpen && MediaIntelligenceTab.IsSelected == false && !tasksOpen && !renderQueueOpen)
-            MediaIntelligenceTab.IsSelected = true;
+        MediaBorder.Visibility = Vis(mediaOpen);
+        PreviewBorder.Visibility = Vis(previewOpen);
+        TimelineWindow.Visibility = Visibility.Visible;
+        RightPanelHost.Visibility = Vis(inspectorWindowOpen);
+        AssetPanelColumn.Width = new GridLength(1, GridUnitType.Star);
+        AssetPanelContent.Visibility = Vis(mediaOpen);
 
-        TimelineBorder.Visibility = Visibility.Visible;
-        TimelineTasksSplitter.Visibility = Visibility.Collapsed;
-        PreviewTimelineSplitter.Visibility = Vis(anyTopPanelOpen);
-        WorkspaceRow.Height = anyTopPanelOpen
-            ? new GridLength(1, GridUnitType.Star)
-            : new GridLength(0);
-        TimelineRow.Height = anyTopPanelOpen
-            ? new GridLength(ActualHeight > 0 && ActualHeight < 700 ? 180 : spaciousWidth ? 300 : 250)
-            : new GridLength(1, GridUnitType.Star);
+        InspectorBorder.Visibility = Vis(inspectorWindowOpen);
+        RightInspectorRow.Height = inspectorWindowOpen ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        RightTasksRow.Height = new GridLength(0);
+        var visibleUtilityTabs = new[]
+        {
+            (Tab: RenderQueueTab, Open: renderQueueOpen),
+            (Tab: MediaIntelligenceTab, Open: intelligenceOpen),
+            (Tab: ProductionWorkflowTab, Open: workflowOpen),
+            (Tab: TranscriptEditorTab, Open: transcriptOpen),
+            (Tab: OutputVariantsTab, Open: variantsOpen),
+            (Tab: GeneratedCompositionsTab, Open: compositionsOpen),
+        };
+        if (_utilityWindowSeparate)
+        {
+            SelectFirstVisibleUtilityTab();
+        }
+        else
+        {
+            if (InspectorTabs.SelectedItem is TabItem selectedTab && selectedTab.Visibility != Visibility.Visible)
+                SelectFirstVisibleInspectorTab();
+            if (!inspectorOpen
+                && activityOpen
+                && !visibleUtilityTabs.Any(entry => entry.Open && entry.Tab.IsSelected))
+                visibleUtilityTabs.FirstOrDefault(entry => entry.Open).Tab?.SetCurrentValue(TabItem.IsSelectedProperty, true);
+        }
+
+        var previewArea = GetEffectivePrimaryArea(PanelId.Preview, _previewWindowPortrait);
+        PreviewBorder.BorderThickness = _previewWindowPortrait
+            ? new Thickness(1, 0, 1, 0)
+            : new Thickness(0, 0, 0, 1);
+        PreviewSourceNameText.MaxWidth = previewArea.ColumnSpan > 1 ? 260 : 120;
+        ConfigureAdaptiveGridSplitters(
+            _previewWindowPortrait,
+            mediaOpen,
+            previewOpen,
+            inspectorWindowOpen);
+
+        if (_previewFullscreen)
+        {
+            Panel.SetZIndex(PreviewBorder, 1000);
+            Grid.SetColumn(PreviewBorder, 0);
+            Grid.SetColumnSpan(PreviewBorder, 5);
+            Grid.SetRow(PreviewBorder, 0);
+            Grid.SetRowSpan(PreviewBorder, 3);
+        }
     }
 
     private void UpdateResponsiveLayout()
     {
         if (!IsInitialized) return;
 
+        ApplyWindowSizeGuardrails();
         var effectiveWidth = ActualWidth > 0 ? ActualWidth / Math.Max(_settings.UiScale, 0.01) : 0;
         var compact = effectiveWidth > 0 && effectiveWidth < 1380;
         var veryCompact = effectiveWidth > 0 && effectiveWidth < 1120;
 
-        HeaderCenterTitle.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        GlobalFunctionSearchBox.Width = veryCompact ? 230 : compact ? 300 : 360;
+        GlobalFunctionSearchButton.Visibility = Visibility.Visible;
+        HeaderMenuScrollViewer.MaxWidth = Math.Max(110, ActualWidth - 430);
         HeaderBrandIcon.Visibility = Visibility.Visible;
         HeaderBrandText.Visibility = Visibility.Collapsed;
         HeaderExportButton.Visibility = Visibility.Visible;
         LocalEditingStatusText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         TimelineZoomControls.Visibility = Visibility.Visible;
+        UpdatePreviewOrientationButton();
+        UpdateMediaIntelligenceResponsiveLayout();
 
         ApplyLayout();
+    }
+
+    private void HeaderMenuScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e) =>
+        ScrollHorizontallyOnMouseWheel(sender, e);
+
+    private void PreviewTransportScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e) =>
+        ScrollHorizontallyOnMouseWheel(sender, e);
+
+    private static void ScrollHorizontallyOnMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is not ScrollViewer scroller || scroller.ScrollableWidth <= 0) return;
+        scroller.ScrollToHorizontalOffset(Math.Clamp(scroller.HorizontalOffset - e.Delta, 0, scroller.ScrollableWidth));
+        e.Handled = true;
     }
 
     private void Sequence_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -703,7 +996,12 @@ public partial class MainWindow : Window
 
     private void SelectedClip_CanExecute(object sender, CanExecuteRoutedEventArgs e)
     {
-        e.CanExecute = _timeline?.SelectedItem != null;
+        var selected = _timeline?.SelectedItem;
+        var track = selected == null
+            ? null
+            : _project.MainSequence?.Tracks.FirstOrDefault(candidate => candidate.Items.Any(item => item.Id == selected.Id));
+
+        e.CanExecute = selected != null && !selected.Locked && track?.Locked != true;
         e.Handled = true;
     }
 
@@ -728,7 +1026,15 @@ public partial class MainWindow : Window
 
     private void ExtractAudio_CanExecute(object sender, CanExecuteRoutedEventArgs e)
     {
-        e.CanExecute = !_isMediaOperationRunning && _selectedInspectorItem?.MediaAssetId != null;
+        var item = _selectedInspectorItem;
+        var asset = item?.MediaAssetId is { } assetId
+            ? _project.MediaLibrary.FirstOrDefault(candidate => candidate.Id == assetId)
+            : null;
+        e.CanExecute = !_isMediaOperationRunning
+            && item != null
+            && ResolveInspectorProfile(item).CanExtractAudio
+            && asset is { Kind: MediaKind.Video, IsOffline: false }
+            && File.Exists(asset.OriginalPath);
         e.Handled = true;
     }
 
@@ -753,31 +1059,47 @@ public partial class MainWindow : Window
 
     private void Paste_CanExecute(object sender, CanExecuteRoutedEventArgs e)
     {
-        e.CanExecute = _clipboard?.Clipboard != null
+        e.CanExecute = (_clipboard?.Clipboard != null || _groupClipboard is { Count: > 0 })
             && _project.MainSequence?.Tracks.Any(track => !track.Locked) == true;
         e.Handled = true;
     }
 
     private void RegisterInspectorChangeTracking()
     {
-        foreach (var textBox in new[]
-                 {
-                     PositionXBox, PositionYBox, ScaleBox, RotationBox, OpacityBox, SpeedBox,
-                     BrightnessBox, ContrastBox, SaturationBox, VolumeBox, PanBox,
-                     TransitionDurationBox, TransitionAlignmentBox,
-                 })
+        var numericTextBoxes = new[]
+        {
+            PositionXBox, PositionYBox, ScaleXBox, ScaleYBox, RotationBox, OpacityBox, SpeedBox,
+            BrightnessBox, ContrastBox, SaturationBox, VolumeBox, PanBox, FadeInBox, FadeOutBox,
+            FontSizeBox, TextOutlineWidthBox, TextShadowOpacityBox,
+            TransitionDurationBox, TransitionAlignmentBox,
+        };
+
+        foreach (var textBox in numericTextBoxes)
         {
             textBox.TextChanged += InspectorControlChanged;
             textBox.TextChanged += (_, _) => ClearInspectorValidation(textBox);
+            textBox.PreviewTextInput += NumericTextBox_PreviewTextInput;
+            DataObject.AddPastingHandler(textBox, NumericTextBox_Paste);
         }
 
-        foreach (var checkBox in new[] { ReverseToggle, BlackWhiteToggle, StabilizeToggle })
+        foreach (var textBox in new[]
+                 {
+                     TextContentBox, TextFillColorBox, TextOutlineColorBox, TextShadowColorBox,
+                 })
+        {
+            textBox.TextChanged += InspectorControlChanged;
+        }
+
+        foreach (var checkBox in new[] { ReverseToggle, BlackWhiteToggle, StabilizeToggle, FontBoldToggle })
         {
             checkBox.Checked += InspectorControlChanged;
             checkBox.Unchecked += InspectorControlChanged;
         }
 
         TransitionKindCombo.SelectionChanged += InspectorControlChanged;
+        FontFamilyCombo.SelectionChanged += InspectorControlChanged;
+        FontFamilyCombo.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler(InspectorControlChanged));
+        FontAlignCombo.SelectionChanged += InspectorControlChanged;
     }
 
     private void BindColorSlider(Slider slider, TextBox textBox)
@@ -816,14 +1138,51 @@ public partial class MainWindow : Window
     private void UpdateInspectorActionState()
     {
         var hasTarget = _selectedInspectorItem != null || _selectedTransitionSelection != null;
-        ApplyInspectorButton.IsEnabled = hasTarget && _inspectorDirty;
+        var canEdit = CanEditInspectorTarget();
+        ApplyInspectorButton.IsEnabled = hasTarget && canEdit && _inspectorDirty;
         ResetInspectorButton.IsEnabled = hasTarget && _inspectorDirty;
         InspectorDirtyText.Text = !hasTarget
             ? "Select a clip or transition to edit"
-            : _inspectorDirty ? "Changes not applied" : "All changes applied";
+            : _inspectorDirty ? "Apply pending changes" : string.Empty;
         InspectorDirtyText.Foreground = _inspectorDirty
-            ? (Brush)FindResource("WarningBrush")
+            ? (Brush)FindResource("AccentHoverBrush")
             : (Brush)FindResource("TextMutedBrush");
+    }
+
+    private void NumericTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (sender is not TextBox textBox) return;
+        e.Handled = !IsNumericTextEditValid(textBox, e.Text);
+    }
+
+    private void NumericTextBox_Paste(object sender, DataObjectPastingEventArgs e)
+    {
+        if (sender is not TextBox textBox) return;
+        if (!e.DataObject.GetDataPresent(DataFormats.Text))
+        {
+            e.CancelCommand();
+            return;
+        }
+
+        var pastedText = e.DataObject.GetData(DataFormats.Text) as string ?? string.Empty;
+        if (!IsNumericTextEditValid(textBox, pastedText))
+            e.CancelCommand();
+    }
+
+    private static bool IsNumericTextEditValid(TextBox textBox, string incomingText)
+    {
+        if (string.IsNullOrEmpty(incomingText)) return true;
+
+        var proposed = textBox.Text.Remove(textBox.SelectionStart, textBox.SelectionLength)
+            .Insert(textBox.SelectionStart, incomingText);
+
+        if (string.IsNullOrWhiteSpace(proposed)
+            || proposed == "-"
+            || proposed == "."
+            || proposed == "-.")
+            return true;
+
+        return InspectorValueLogic.TryParseFiniteNumber(proposed, out _);
     }
 
     private void ResetInspectorEdits()
@@ -836,28 +1195,34 @@ public partial class MainWindow : Window
 
     private bool TryReadNumber(TextBox textBox, string label, out double value)
     {
-        if (double.TryParse(textBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
-            || double.TryParse(textBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out value))
+        if (InspectorValueLogic.TryParseFiniteNumber(textBox.Text, out value))
         {
             ClearInspectorValidation(textBox);
             return true;
         }
 
-        textBox.BorderBrush = (Brush)FindResource("DangerBrush");
-        textBox.BorderThickness = new Thickness(2);
-        textBox.ToolTip = $"Enter a valid number for {label}.";
-        InspectorDirtyText.Text = $"Invalid {label}";
-        InspectorDirtyText.Foreground = (Brush)FindResource("DangerBrush");
-        textBox.Focus();
+        SetInspectorValidation(textBox, $"Enter a finite number for {label}.", label);
         return false;
     }
 
-    private void ClearInspectorValidation(TextBox textBox)
+    private void SetInspectorValidation(Control control, string tooltip, string label)
     {
-        textBox.BorderBrush = (Brush)FindResource("BorderStrongBrush");
-        textBox.BorderThickness = new Thickness(1);
-        if (textBox.ToolTip is string tooltip && tooltip.StartsWith("Enter a valid number", StringComparison.Ordinal))
-            textBox.ToolTip = null;
+        control.BorderBrush = (Brush)FindResource("AccentPressedBrush");
+        control.BorderThickness = new Thickness(2);
+        control.ToolTip = tooltip;
+        InspectorDirtyText.Text = $"Invalid {label}";
+        InspectorDirtyText.Foreground = (Brush)FindResource("AccentHoverBrush");
+        control.Focus();
+    }
+
+    private void ClearInspectorValidation(Control control)
+    {
+        control.BorderBrush = (Brush)FindResource("BorderStrongBrush");
+        control.BorderThickness = new Thickness(1);
+        if (control.ToolTip is string tooltip
+            && (tooltip.StartsWith("Enter a", StringComparison.Ordinal)
+                || tooltip.StartsWith("Choose a", StringComparison.Ordinal)))
+            control.ToolTip = null;
     }
 
     private void OpenUtilityPanel(PanelId panelId, TabItem tab)
@@ -865,7 +1230,7 @@ public partial class MainWindow : Window
         if (!_layout.IsPanelOpen(panelId))
         {
             _layout = _layout.WithPanelToggled(panelId, true);
-            foreach (MenuItem item in PanelsMenu.Items)
+            foreach (var item in PanelsMenu.Items.OfType<MenuItem>())
                 if (item.Tag is PanelId id && id == panelId) item.IsChecked = true;
             ApplyLayout();
             SaveLayout();
@@ -879,57 +1244,12 @@ public partial class MainWindow : Window
         if (!_layout.IsPanelOpen(PanelId.Inspector))
         {
             _layout = _layout.WithPanelToggled(PanelId.Inspector, true);
-            foreach (MenuItem item in PanelsMenu.Items)
+            foreach (var item in PanelsMenu.Items.OfType<MenuItem>())
                 if (item.Tag is PanelId id && id == PanelId.Inspector) item.IsChecked = true;
             ApplyLayout();
         }
 
-        InspectorTabs.SelectedIndex = Math.Clamp(tabIndex, 0, InspectorTabs.Items.Count - 1);
-    }
-
-    private void PlayPreview()
-    {
-        if (!PreviewPlayButton.IsEnabled || PreviewPlayer.Visibility != Visibility.Visible) return;
-        PreviewPlayer.Play();
-        _isPreviewPlaying = true;
-    }
-
-    private void PausePreview()
-    {
-        if (!PreviewPauseButton.IsEnabled || PreviewPlayer.Visibility != Visibility.Visible) return;
-        PreviewPlayer.Pause();
-        _isPreviewPlaying = false;
-    }
-
-    private void StopPreview()
-    {
-        PreviewPlayer.Stop();
-        PreviewPlayer.Position = TimeSpan.Zero;
-        _isPreviewPlaying = false;
-        UpdatePreviewProgress();
-    }
-
-    private void TogglePreviewPlayback()
-    {
-        if (_isPreviewPlaying) PausePreview();
-        else PlayPreview();
-    }
-
-    private void SetPreviewControlsEnabled(bool enabled)
-    {
-        PreviewPlayButton.IsEnabled = enabled && PreviewPlayer.Visibility == Visibility.Visible;
-        PreviewPauseButton.IsEnabled = enabled && PreviewPlayer.Visibility == Visibility.Visible;
-        PreviewStopButton.IsEnabled = enabled && PreviewPlayer.Visibility == Visibility.Visible;
-        PreviewPreviousFrameButton.IsEnabled = enabled && PreviewPlayer.Visibility == Visibility.Visible;
-        PreviewNextFrameButton.IsEnabled = enabled && PreviewPlayer.Visibility == Visibility.Visible;
-        PreviewSeekSlider.IsEnabled = enabled;
-        PreviewTimeBox.IsEnabled = enabled;
-        PreviewMarkInButton.IsEnabled = enabled;
-        PreviewMarkOutButton.IsEnabled = enabled;
-        PreviewClearMarksButton.IsEnabled = enabled;
-        PreviewInsertButton.IsEnabled = enabled && _previewAsset != null;
-        PreviewOverwriteButton.IsEnabled = enabled && _previewAsset != null;
-        PreviewSnapshotButton.IsEnabled = enabled;
+        EnsureInspectorCoreTabVisible(tabIndex);
     }
 
     private void ConstrainWindowToWorkingArea()
@@ -958,6 +1278,10 @@ public partial class MainWindow : Window
         var isEdgeToEdge = WindowState == WindowState.Maximized;
         WindowFrameBorder.BorderThickness = isEdgeToEdge ? new Thickness(0) : new Thickness(1);
         WindowFrameBorder.CornerRadius = isEdgeToEdge ? new CornerRadius(0) : new CornerRadius(10);
+        MaximizeWindowIcon.Data = Geometry.Parse(isEdgeToEdge
+            ? "M6,3 L15,3 L15,12 L12,12 M3,6 L12,6 L12,15 L3,15 Z"
+            : "M4,4 L14,4 L14,14 L4,14 Z");
+        MaximizeWindowButton.ToolTip = isEdgeToEdge ? "Restore" : "Maximize";
 
         var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
         if (chrome != null)
@@ -995,6 +1319,12 @@ public partial class MainWindow : Window
         minMaxInfo.PtMaxSize.X = workArea.Right - workArea.Left;
         minMaxInfo.PtMaxSize.Y = workArea.Bottom - workArea.Top;
         minMaxInfo.PtMaxTrackSize = minMaxInfo.PtMaxSize;
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var minimumWidthPixels = Math.Max(1, (int)Math.Ceiling(MinWidth * dpi.DpiScaleX));
+        var minimumHeightPixels = Math.Max(1, (int)Math.Ceiling(MinHeight * dpi.DpiScaleY));
+        minMaxInfo.PtMinTrackSize.X = Math.Min(minMaxInfo.PtMaxTrackSize.X, minimumWidthPixels);
+        minMaxInfo.PtMinTrackSize.Y = Math.Min(minMaxInfo.PtMaxTrackSize.Y, minimumHeightPixels);
 
         Marshal.StructureToPtr(minMaxInfo, lParam, true);
         handled = true;
@@ -1055,7 +1385,7 @@ public partial class MainWindow : Window
         var availableWidth = Math.Max(320, workArea.Width - 32);
         var availableHeight = Math.Max(220, workArea.Height - 32);
 
-        return new Window
+        var dialog = new Window
         {
             Title = title,
             Owner = this,
@@ -1075,6 +1405,7 @@ public partial class MainWindow : Window
             FontFamily = FontFamily,
             FontSize = FontSize,
         };
+        return dialog;
     }
 
     private Border CreateDialogFrame(Window dialog, string title, UIElement content, Thickness padding)
@@ -1176,36 +1507,13 @@ public partial class MainWindow : Window
 
     private void RestartAutosave()
     {
-        if (!_settings.AutosaveEnabled)
-        {
-            _autosave.StopBackground();
-            AutosaveStatusText.Text = "Autosave: off";
-            return;
-        }
-
         var interval = Math.Clamp(_settings.AutosaveIntervalSeconds, 5, 3600);
-        _autosave.StartBackground(
-            _project,
-            TimeSpan.FromSeconds(interval),
-            path => Dispatcher.BeginInvoke(() => ShowAutosaveSaved(path)),
-            error => Dispatcher.BeginInvoke(() => AutosaveStatusText.Text = $"Autosave failed: {error.Message}"));
-        AutosaveStatusText.Text = $"Autosave: {interval} seconds";
-    }
-
-    private void SaveAutosaveSnapshot()
-    {
-        if (!_settings.AutosaveEnabled) return;
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(_currentProjectPath))
-                _projectRepo.Save(_project, _currentProjectPath);
-            var autosavePath = _autosave.Save(_project);
-            ShowAutosaveSaved(!string.IsNullOrWhiteSpace(_currentProjectPath) ? _currentProjectPath : autosavePath);
-        }
-        catch (Exception ex)
-        {
-            AutosaveStatusText.Text = $"Autosave failed: {ex.Message}";
-        }
+        _saveCoordinator.ConfigureAutosave(
+            _settings.AutosaveEnabled,
+            TimeSpan.FromSeconds(interval));
+        AutosaveStatusText.Text = _settings.AutosaveEnabled
+            ? $"Autosave: {interval} seconds · edit bursts coalesced"
+            : "Autosave: off";
     }
 
     private void ShowAutosaveSaved(string path)
@@ -1214,34 +1522,92 @@ public partial class MainWindow : Window
         AutosaveStatusText.ToolTip = path;
     }
 
-    private void RestoreLatestAutosaveIfAvailable()
+    private async Task RecoverLatestAutosaveAsync()
     {
-        if (!_settings.AutosaveEnabled) return;
+        if (!await ConfirmCanReplaceCurrentProjectAsync()) return;
 
         try
         {
-            var restored = _autosave.LoadMostRecent();
-            if (restored == null) return;
-
-            var answer = MessageBox.Show(
-                this,
-                $"Rushframe found an autosaved copy of '{restored.Name}'. Restore it now?",
-                "Recover Autosave",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes)
+            var restored = await _autosave.LoadMostRecentAsync();
+            if (restored == null)
             {
-                AutosaveStatusText.Text = "Autosave recovery skipped";
+                AutosaveStatusText.Text = "No autosave is available";
                 return;
             }
 
             LoadProjectIntoEditor(restored, null, $"{restored.Name} (recovered)");
             _projectDirty = true;
-            AutosaveStatusText.Text = "Recovered autosave — save to keep it";
+            AutosaveStatusText.Text = "Recovered latest autosave";
         }
         catch (Exception ex)
         {
-            AutosaveStatusText.Text = $"Autosave restore failed: {ex.Message}";
+            AutosaveStatusText.Text = $"Autosave recovery failed: {ex.Message}";
+        }
+    }
+
+    private async Task LoadOptionalCapabilitiesAsync()
+    {
+        if (_optionalCapabilitiesLoaded) return;
+        _optionalCapabilitiesLoaded = true;
+        try
+        {
+            var assetDirectory = Path.Combine(_appData, "asset-packs");
+            var extensionDirectory = Path.Combine(_appData, "extensions");
+            var providersTask = Task.Run(() => _creativeAssetPackService.LoadDirectory(assetDirectory));
+            var extensionsTask = Task.Run(() => _extensionManifestService.LoadDirectory(extensionDirectory));
+            await Task.WhenAll(providersTask, extensionsTask);
+
+            _installedAssetProviders.Clear();
+            _installedAssetProviders.AddRange(await providersTask);
+            _installedExtensions.Clear();
+            _installedExtensions.AddRange(await extensionsTask);
+            MergeInstalledCapabilities(_project);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Optional asset capabilities unavailable: {ex.Message}";
+        }
+    }
+
+    private async Task EnsureFontsLoadedAsync()
+    {
+        try
+        {
+            if (!_fontsLoaded)
+            {
+                _systemFontNames = await Task.Run(() => Fonts.SystemFontFamilies
+                    .Select(font => font.Source)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray());
+                _fontsLoaded = true;
+            }
+
+            var selectedValue = _selectedInspectorItem?.FontFamily ?? FontFamilyCombo.Text;
+            var projectFonts = _project.MediaLibrary
+                .Where(asset => asset.Kind == MediaKind.Font && !asset.IsOffline && File.Exists(asset.OriginalPath))
+                .Select(asset => new InspectorFontChoice($"Project · {Path.GetFileName(asset.OriginalPath)}", asset.OriginalPath, true))
+                .OrderBy(choice => choice.DisplayName, StringComparer.OrdinalIgnoreCase);
+
+            _inspectorFontChoices.Clear();
+            _inspectorFontChoices.AddRange(projectFonts);
+            _inspectorFontChoices.AddRange(_systemFontNames.Select(name => new InspectorFontChoice(name, name, false)));
+
+            _suppressInspectorChangeTracking = true;
+            try
+            {
+                FontFamilyCombo.ItemsSource = _inspectorFontChoices.ToArray();
+                SelectInspectorFont(selectedValue);
+            }
+            finally
+            {
+                _suppressInspectorChangeTracking = false;
+            }
+        }
+        catch
+        {
+            _fontsLoaded = false;
+            throw;
         }
     }
 
@@ -1252,7 +1618,10 @@ public partial class MainWindow : Window
         var repoRoot = FindRepoRoot();
         var apiKey = SecretProtectionService.Unprotect(_settings.ProtectedGeminiApiKey);
         StatusText.Text = "Starting intelligence backend…";
-        var started = await _intelligenceBackend.StartAsync(repoRoot, apiKey);
+        var started = await _intelligenceBackend.StartAsync(
+            repoRoot,
+            apiKey,
+            _localAgentBridge.SessionToken);
         StatusText.Text = started
             ? $"Intelligence backend ready on {_intelligenceBackend.BaseUri}"
             : "Intelligence backend unavailable — run the intelligence setup script";
@@ -1569,7 +1938,7 @@ public partial class MainWindow : Window
         var badge = new Border
         {
             Background = ok ? (Brush)FindResource("AccentSurfaceBrush") : (Brush)FindResource("PanelBrush"),
-            BorderBrush = ok ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("WarningBrush"),
+            BorderBrush = ok ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("BorderStrongBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
             MinWidth = 74,
@@ -1579,7 +1948,7 @@ public partial class MainWindow : Window
             Child = new TextBlock
             {
                 Text = ok ? "Installed" : "Missing",
-                Foreground = ok ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("WarningBrush"),
+                Foreground = ok ? (Brush)FindResource("AccentHoverBrush") : (Brush)FindResource("TextMutedBrush"),
                 FontWeight = FontWeights.SemiBold,
                 FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -1616,11 +1985,21 @@ public partial class MainWindow : Window
     {
         mcpServers = new Dictionary<string, object>
         {
-            ["rushframe"] = new { url = GetMcpEndpoint() },
+            ["rushframe"] = new
+            {
+                url = GetMcpEndpoint(),
+                headers = new Dictionary<string, string>
+                {
+                    ["X-Rushframe-Session"] = _localAgentBridge.SessionToken,
+                },
+            },
         },
     }, new JsonSerializerOptions { WriteIndented = true });
 
-    private string GetCodexMcpConfig() => $"[mcp_servers.rushframe]{Environment.NewLine}url = \"{GetMcpEndpoint()}\"{Environment.NewLine}";
+    private string GetCodexMcpConfig() =>
+        $"[mcp_servers.rushframe]{Environment.NewLine}" +
+        $"url = \"{GetMcpEndpoint()}\"{Environment.NewLine}" +
+        $"http_headers = {{ \"X-Rushframe-Session\" = \"{_localAgentBridge.SessionToken}\" }}{Environment.NewLine}";
 
     private void CopyMcpUrl()
     {
@@ -1679,13 +2058,1019 @@ public partial class MainWindow : Window
     {
         return path switch
         {
-            "" or "health" => new { ok = true, service = "rushframe-editor-bridge" },
+            "" or "health" => new { ok = true, service = "rushframe-editor-bridge", schemaVersion = 2 },
+            "capabilities" => BuildAgentCapabilities(),
             "timeline" => BuildAgentTimelineState(),
+            "transcript" => BuildAgentTranscriptState(payload ?? default),
+            "workflow" => BuildAgentWorkflowState(),
+            "providers" => BuildAgentProviderState(),
+            "upsert-provider" => UpsertAgentProvider(payload ?? default),
+            "estimate-cost" => EstimateAgentProviderCost(payload ?? default),
+            "reconcile-cost" => ReconcileAgentProviderCost(payload ?? default),
+            "set-workflow-stage" => SetAgentWorkflowStage(payload ?? default),
+            "record-decision" => RecordAgentProductionDecision(payload ?? default),
+            "variants" => BuildAgentVariantState(),
+            "upsert-variant" => UpsertAgentVariant(payload ?? default),
+            "render-variant" => await RenderAgentVariantAsync(payload ?? default, cancellationToken),
+            "compositions" => BuildAgentCompositionState(),
+            "register-composition" => RegisterAgentComposition(payload ?? default),
+            "render-composition" => await RenderAgentCompositionAsync(payload ?? default, cancellationToken),
+            "render-jobs" => new { ok = true, jobs = _project.RenderJobs.TakeLast(50).ToArray() },
+            "retry-render-job" => await RetryAgentRenderJobAsync(payload ?? default, cancellationToken),
+            "receipts" => new { ok = true, receipts = _project.RenderReceipts.TakeLast(50).ToArray() },
             "audit" => new { ok = true, entries = _agentAuditLog.TakeLast(50).ToArray() },
+            "plan" => PreviewAgentEditPlan(payload ?? default),
+            "apply-plan" => await ApplyAgentEditPlanAsync(payload ?? default, cancellationToken),
             "edit" => await ApplyAgentTimelineEditAsync(payload ?? default, cancellationToken),
             "render" => await RenderAgentTimelineAsync(payload ?? default, cancellationToken),
             _ => new { ok = false, error = $"Unknown bridge endpoint: {path}" },
         };
+    }
+
+    private object BuildAgentCapabilities() => new
+    {
+        ok = true,
+        protocolVersion = 2,
+        projectSchemaVersion = Project.CurrentSchemaVersion,
+        editPlan = new
+        {
+            endpoint = "apply-plan",
+            previewEndpoint = "plan",
+            maximumOperations = 100,
+            atomic = true,
+            undoable = true,
+            revisionRequired = true,
+            approvalDefault = true,
+            actions = AgentEditCommandFactory.SupportedActions,
+        },
+        evidence = new[] { "timeline", "transcript", "workflow", "variants", "compositions", "receipts", "audit" },
+        constraints = new[]
+        {
+            "registered-local-media-only",
+            "no-source-file-mutation",
+            "locked-items-and-tracks-are-protected",
+            "manual-edits-win-through-project-revision-conflicts",
+            "external-compositions-render-to-local-assets",
+        },
+    };
+
+    private object BuildAgentTranscriptState(JsonElement payload)
+    {
+        MediaIntelligenceAnalysis? analysis = null;
+        if (AgentPayloadReader.ReadString(payload, "media_asset_id") is { Length: > 0 } assetText
+            && Guid.TryParse(assetText, out var assetGuid))
+        {
+            analysis = _project.MediaIntelligence.FirstOrDefault(candidate => candidate.MediaAssetId == new MediaAssetId(assetGuid));
+        }
+        else if (_project.MediaIntelligence.Count == 1)
+        {
+            analysis = _project.MediaIntelligence[0];
+        }
+
+        if (analysis == null)
+            return new { ok = false, error = "Select media_asset_id when more than one analyzed asset exists" };
+
+        var start = Math.Max(0, AgentPayloadReader.ReadSeconds(payload, "start", 0));
+        var end = AgentPayloadReader.ReadSeconds(payload, "end", analysis.Metadata.Duration.Seconds);
+        var segments = analysis.Transcript
+            .Where(segment => segment.End.Seconds > start && segment.Start.Seconds < end)
+            .Select(segment => new
+            {
+                id = segment.SegmentId,
+                start = segment.Start.Seconds,
+                end = segment.End.Seconds,
+                text = segment.Text,
+                speaker = segment.Speaker,
+                confidence = segment.Confidence,
+                containsFiller = segment.ContainsFiller,
+                repeatedTake = segment.RepeatedTake,
+                hookScore = segment.HookScore,
+                recommendedUse = segment.RecommendedUse,
+                words = segment.Words.Select(word => new
+                {
+                    start = word.Start.Seconds,
+                    end = word.End.Seconds,
+                    text = word.Text,
+                    confidence = word.Confidence,
+                }),
+            })
+            .ToArray();
+        return new
+        {
+            ok = true,
+            mediaAssetId = analysis.MediaAssetId.ToString(),
+            duration = analysis.Metadata.Duration.Seconds,
+            segments,
+            silence = analysis.Audio.Silence
+                .Where(range => range.End.Seconds > start && range.Start.Seconds < end)
+                .Select(range => new { start = range.Start.Seconds, end = range.End.Seconds, duration = range.Duration.Seconds }),
+            audioEvents = analysis.Audio.Events
+                .Where(value => value.End.Seconds > start && value.Start.Seconds < end)
+                .Select(value => new { id = value.EventId, start = value.Start.Seconds, end = value.End.Seconds, type = value.EventType, value.Label, value.Confidence, value.Speaker }),
+            moments = analysis.Moments
+                .Where(value => value.End.Seconds > start && value.Start.Seconds < end)
+                .OrderByDescending(value => value.Scores.Overall)
+                .Select(value => new
+                {
+                    id = value.MomentId,
+                    start = value.Start.Seconds,
+                    end = value.End.Seconds,
+                    value.Summary,
+                    roles = value.EditingRoles,
+                    value.Tags,
+                    score = value.Scores.Overall,
+                    hook = value.Scores.HookPotential,
+                    value.Confidence,
+                }),
+            duplicateTakeGroups = analysis.DuplicateTakeGroups,
+            warnings = analysis.Warnings,
+            editPolicy = _project.TranscriptEditPolicy,
+        };
+    }
+
+    private object BuildAgentWorkflowState() => new
+    {
+        ok = true,
+        activeStageId = _project.Workflow.ActiveStageId,
+        budget = new
+        {
+            limitUsd = _project.Workflow.BudgetLimitUsd,
+            estimatedUsd = _project.Workflow.EstimatedSpendUsd,
+            actualUsd = _project.Workflow.ActualSpendUsd,
+        },
+        stages = _project.Workflow.Stages,
+        decisions = _project.Workflow.Decisions,
+    };
+
+    private object BuildAgentProviderState() => new
+    {
+        ok = true,
+        policy = new
+        {
+            localFirst = _project.Workflow.LocalFirst,
+            paidProvidersEnabled = _project.Workflow.PaidProvidersEnabled,
+            budgetMode = _project.Workflow.BudgetMode,
+            budgetLimitUsd = _project.Workflow.BudgetLimitUsd,
+            estimatedSpendUsd = _project.Workflow.EstimatedSpendUsd,
+            actualSpendUsd = _project.Workflow.ActualSpendUsd,
+            requireApprovalForPaidOperations = _project.Workflow.RequireApprovalForPaidOperations,
+            singleActionApprovalThresholdUsd = _project.Workflow.SingleActionApprovalThresholdUsd,
+        },
+        providers = _project.AutomationProviders,
+        costEvents = _project.Workflow.CostEvents.TakeLast(100).ToArray(),
+    };
+
+    private object UpsertAgentProvider(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var providerId = AgentPayloadReader.ReadRequiredString(payload, "provider_id");
+        var existing = _project.AutomationProviders.FirstOrDefault(candidate => candidate.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
+        var local = AgentPayloadReader.ReadBool(payload, "local", existing?.Local ?? false);
+        var paid = AgentPayloadReader.ReadBool(payload, "paid", existing?.Paid ?? false);
+        var enabled = AgentPayloadReader.ReadBool(payload, "enabled", existing?.Enabled ?? false);
+        var endpoint = AgentPayloadReader.ReadString(payload, "endpoint") ?? existing?.Endpoint;
+        var endpointError = ValidateProviderEndpoint(local, endpoint);
+        if (endpointError != null) return new { ok = false, error = endpointError };
+        var enablePaidPolicy = AgentPayloadReader.ReadNullableBool(payload, "paid_providers_enabled");
+        var paidPolicyWillBeEnabled = enablePaidPolicy ?? _project.Workflow.PaidProvidersEnabled;
+        if (paid && enabled && !paidPolicyWillBeEnabled)
+            return new { ok = false, error = "Paid providers are disabled for this project. Enable the paid-provider policy with explicit user approval first." };
+        if (paid && enabled && !ConfirmAgentEdit($"Enable paid provider '{providerId}'? Charges may be incurred."))
+            return new { ok = false, rejected = true, error = "User rejected paid provider" };
+
+        if (enablePaidPolicy == true
+            && !_project.Workflow.PaidProvidersEnabled
+            && !ConfirmAgentEdit("Enable paid automation providers for this project? Every paid action will still require budget checks and approval."))
+            return new { ok = false, rejected = true, error = "User rejected paid-provider policy" };
+
+        using var mutation = _saveCoordinator.BeginMutation();
+        var provider = existing ?? new AutomationProviderManifest { Id = providerId };
+        provider.Name = AgentPayloadReader.ReadString(payload, "name") ?? provider.Name;
+        provider.Local = local;
+        provider.Paid = paid;
+        provider.Enabled = enabled;
+        provider.Endpoint = endpoint;
+        provider.Notes = AgentPayloadReader.ReadString(payload, "notes") ?? provider.Notes;
+        if (enabled && paid) provider.ApprovedUtc = DateTimeOffset.UtcNow;
+        if (AgentPayloadReader.TryGetProperty(payload, "capabilities", out var capabilities) && capabilities.ValueKind == JsonValueKind.Array)
+        {
+            provider.Capabilities.Clear();
+            provider.Capabilities.AddRange(capabilities.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.String).Select(value => value.GetString()!).Where(value => !string.IsNullOrWhiteSpace(value)));
+        }
+        if (AgentPayloadReader.TryGetProperty(payload, "estimated_unit_costs_usd", out var costs) && costs.ValueKind == JsonValueKind.Object)
+        {
+            provider.EstimatedUnitCostsUsd.Clear();
+            foreach (var property in costs.EnumerateObject())
+            {
+                if (decimal.TryParse(property.Value.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var cost)
+                    && cost >= 0)
+                    provider.EstimatedUnitCostsUsd[property.Name] = cost;
+            }
+        }
+        if (existing == null) _project.AutomationProviders.Add(provider);
+        if (enablePaidPolicy.HasValue) _project.Workflow.PaidProvidersEnabled = enablePaidPolicy.Value;
+        if (AgentPayloadReader.ReadString(payload, "budget_mode") is { Length: > 0 } budgetModeText
+            && Enum.TryParse<ProductionBudgetMode>(budgetModeText, true, out var budgetMode))
+            _project.Workflow.BudgetMode = budgetMode;
+        if (AgentPayloadReader.HasProperty(payload, "budget_limit_usd"))
+            _project.Workflow.BudgetLimitUsd = (decimal)Math.Max(0, AgentPayloadReader.ReadSeconds(payload, "budget_limit_usd", 0));
+        _project.IncrementRevision();
+        MarkProjectDirty("Automation provider policy updated");
+        AddAgentAudit("upsert_provider", $"Provider {provider.Id}: enabled={provider.Enabled}, paid={provider.Paid}", true, null);
+        return new { ok = true, revision = _project.Revision, provider, policy = BuildAgentProviderState() };
+    }
+
+    private object EstimateAgentProviderCost(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var providerId = AgentPayloadReader.ReadRequiredString(payload, "provider_id");
+        var provider = _project.AutomationProviders.FirstOrDefault(candidate => candidate.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
+        if (provider == null || !provider.Enabled) return new { ok = false, error = "Provider is not registered and enabled" };
+        var operation = AgentPayloadReader.ReadRequiredString(payload, "operation");
+        var estimate = (decimal)Math.Max(0, AgentPayloadReader.ReadSeconds(payload, "estimated_usd", 0));
+        if (!provider.Paid && estimate > 0) return new { ok = false, error = "A free/local provider cannot reserve a non-zero paid cost" };
+        if (provider.Paid && !_project.Workflow.PaidProvidersEnabled) return new { ok = false, error = "Paid providers are disabled" };
+
+        var reserved = _project.Workflow.CostEvents.Where(value => value.Status == ProductionCostStatus.Reserved).Sum(value => value.ReservedUsd);
+        var projected = _project.Workflow.ActualSpendUsd + reserved + estimate;
+        var overBudget = _project.Workflow.BudgetLimitUsd.HasValue && projected > _project.Workflow.BudgetLimitUsd.Value;
+        if (overBudget && _project.Workflow.BudgetMode == ProductionBudgetMode.Cap)
+            return new { ok = false, budgetExceeded = true, error = $"Projected spend ${projected:0.00} exceeds the ${_project.Workflow.BudgetLimitUsd:0.00} project cap" };
+
+        var localAlternative = _project.Workflow.LocalFirst && !provider.Local
+            ? _project.AutomationProviders.FirstOrDefault(candidate => candidate.Enabled && candidate.Local && candidate.Capabilities.Intersect(provider.Capabilities, StringComparer.OrdinalIgnoreCase).Any())
+            : null;
+        var requiresApproval = provider.Paid && _project.Workflow.RequireApprovalForPaidOperations
+                               || estimate > _project.Workflow.SingleActionApprovalThresholdUsd
+                               || localAlternative != null;
+        if (requiresApproval)
+        {
+            var alternative = localAlternative == null ? string.Empty : $"\nLocal alternative available: {localAlternative.Name}.";
+            if (!ConfirmAgentEdit($"Reserve ${estimate:0.00} for {provider.Name}: {operation}?{alternative}"))
+                return new { ok = false, rejected = true, error = "User rejected cost reservation" };
+        }
+
+        var costEvent = new ProductionCostEvent
+        {
+            ProviderId = provider.Id,
+            Operation = operation,
+            EstimatedUsd = estimate,
+            ReservedUsd = estimate,
+            Status = ProductionCostStatus.Reserved,
+            UserApproved = requiresApproval,
+        };
+        using var mutation = _saveCoordinator.BeginMutation();
+        _project.Workflow.CostEvents.Add(costEvent);
+        RecalculateWorkflowCosts();
+        _project.IncrementRevision();
+        MarkProjectDirty("Automation cost reserved");
+        AddAgentAudit("estimate_cost", $"{provider.Name}/{operation}: ${estimate:0.00}", true, overBudget ? "Budget warning" : null);
+        return new { ok = true, revision = _project.Revision, costEvent, budgetWarning = overBudget, localAlternative = localAlternative?.Name };
+    }
+
+    private object ReconcileAgentProviderCost(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var eventId = AgentPayloadReader.ReadRequiredString(payload, "cost_event_id");
+        var costEvent = _project.Workflow.CostEvents.FirstOrDefault(candidate => candidate.Id == eventId);
+        if (costEvent == null) return new { ok = false, error = "Cost event not found" };
+        if (costEvent.Status is ProductionCostStatus.Completed or ProductionCostStatus.Failed or ProductionCostStatus.Refunded)
+            return new { ok = false, error = "Cost event is already finalized" };
+        var actual = (decimal)Math.Max(0, AgentPayloadReader.ReadSeconds(payload, "actual_usd", 0));
+        var success = AgentPayloadReader.ReadBool(payload, "success", true);
+        using var mutation = _saveCoordinator.BeginMutation();
+        costEvent.ActualUsd = actual;
+        costEvent.ReservedUsd = 0;
+        costEvent.Status = success ? ProductionCostStatus.Completed : ProductionCostStatus.Failed;
+        costEvent.Error = AgentPayloadReader.ReadString(payload, "error");
+        costEvent.CompletedUtc = DateTimeOffset.UtcNow;
+        RecalculateWorkflowCosts();
+        _project.IncrementRevision();
+        MarkProjectDirty("Automation cost reconciled");
+        AddAgentAudit("reconcile_cost", $"{costEvent.ProviderId}/{costEvent.Operation}: ${actual:0.00}", success, costEvent.Error);
+        return new { ok = true, revision = _project.Revision, costEvent, policy = BuildAgentProviderState() };
+    }
+
+    private void RecalculateWorkflowCosts()
+    {
+        _project.Workflow.EstimatedSpendUsd = _project.Workflow.CostEvents
+            .Where(value => value.Status == ProductionCostStatus.Reserved)
+            .Sum(value => value.ReservedUsd);
+        _project.Workflow.ActualSpendUsd = _project.Workflow.CostEvents
+            .Where(value => value.Status is ProductionCostStatus.Completed or ProductionCostStatus.Failed)
+            .Sum(value => value.ActualUsd);
+    }
+
+    private static string? ValidateProviderEndpoint(bool local, string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint)) return null;
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)) return "Provider endpoint is not a valid absolute URI";
+        if (local)
+        {
+            if (uri.IsFile) return null;
+            if (uri.Scheme is "http" or "https" && System.Net.IPAddress.TryParse(uri.Host, out var address) && System.Net.IPAddress.IsLoopback(address)) return null;
+            if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return null;
+            return "Local provider endpoints must be file URIs or loopback HTTP endpoints";
+        }
+        return uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : "Remote provider endpoints must use HTTPS";
+    }
+
+    private object BuildAgentVariantState() => new
+    {
+        ok = true,
+        variants = _project.ExportVariants,
+    };
+
+    private object BuildAgentCompositionState() => new
+    {
+        ok = true,
+        rule = "External composition engines may only render local generated assets. Rushframe remains the timeline and project source of truth.",
+        compositions = _project.ExternalCompositions,
+    };
+
+    private object SetAgentWorkflowStage(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        _project.Workflow.EnsureDefaults();
+        var stageId = AgentPayloadReader.ReadRequiredString(payload, "stage_id");
+        var stage = _project.Workflow.Stages.FirstOrDefault(candidate => candidate.Id.Equals(stageId, StringComparison.OrdinalIgnoreCase));
+        if (stage == null) return new { ok = false, error = $"Workflow stage '{stageId}' was not found" };
+        var statusText = AgentPayloadReader.ReadString(payload, "status") ?? stage.Status.ToString();
+        if (!Enum.TryParse<ProductionStageStatus>(statusText, true, out var status))
+            return new { ok = false, error = $"Unknown workflow status '{statusText}'" };
+        var requiresHumanDecision = stage.RequiresApproval && status is ProductionStageStatus.Approved or ProductionStageStatus.Completed;
+        if (requiresHumanDecision
+            && AgentPayloadReader.ReadBool(payload, "require_approval", true)
+            && !ConfirmAgentEdit($"Approve workflow stage '{stage.Name}' as {status}?"))
+            return new { ok = false, rejected = true, error = "User rejected workflow stage change" };
+
+        using var mutation = _saveCoordinator.BeginMutation();
+        stage.Status = status;
+        stage.Summary = AgentPayloadReader.ReadString(payload, "summary") ?? stage.Summary;
+        if (status == ProductionStageStatus.Running) stage.StartedUtc ??= DateTimeOffset.UtcNow;
+        if (status == ProductionStageStatus.Approved)
+        {
+            stage.ApprovedUtc = DateTimeOffset.UtcNow;
+            stage.ApprovedBy = "local-user";
+        }
+        if (status is ProductionStageStatus.Completed or ProductionStageStatus.Failed or ProductionStageStatus.Skipped)
+            stage.CompletedUtc = DateTimeOffset.UtcNow;
+        ReplaceStringsFromPayload(payload, "inputs", stage.Inputs);
+        ReplaceStringsFromPayload(payload, "outputs", stage.Outputs);
+        ReplaceStringsFromPayload(payload, "warnings", stage.Warnings);
+        ReplaceStringsFromPayload(payload, "artifact_paths", stage.ArtifactPaths);
+        stage.Revision++;
+        _project.Workflow.ActiveStageId = stage.Id;
+        ReadyNextWorkflowStage(stage);
+        _project.IncrementRevision();
+        MarkProjectDirty("Production workflow updated");
+        AddAgentAudit("set_workflow_stage", $"{stage.Name}: {status}", true, null);
+        return new { ok = true, revision = _project.Revision, stage, workflow = BuildAgentWorkflowState() };
+    }
+
+    private object RecordAgentProductionDecision(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var category = AgentPayloadReader.ReadRequiredString(payload, "category");
+        var question = AgentPayloadReader.ReadRequiredString(payload, "question");
+        var selected = AgentPayloadReader.ReadRequiredString(payload, "selected_option");
+        var options = ReadStringArray(payload, "options_considered");
+        if (options.Count < 2) return new { ok = false, error = "A production decision must record at least two considered options" };
+        if (!options.Contains(selected, StringComparer.OrdinalIgnoreCase))
+            return new { ok = false, error = "selected_option must be present in options_considered" };
+        var userVisible = AgentPayloadReader.ReadBool(payload, "user_visible", true);
+        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", userVisible);
+        if (requireApproval && !ConfirmAgentEdit($"Production decision:\n{question}\n\nChoose: {selected}"))
+            return new { ok = false, rejected = true, error = "User rejected production decision" };
+
+        var decision = new ProductionDecision
+        {
+            Category = category,
+            Question = question,
+            SelectedOption = selected,
+            Reason = AgentPayloadReader.ReadString(payload, "reason") ?? string.Empty,
+            Confidence = Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "confidence", 0.5), 0, 1),
+            UserVisible = userVisible,
+            Status = requireApproval ? ProductionDecisionStatus.Approved : ProductionDecisionStatus.Proposed,
+            ResolvedUtc = requireApproval ? DateTimeOffset.UtcNow : null,
+        };
+        decision.OptionsConsidered.AddRange(options);
+        using var mutation = _saveCoordinator.BeginMutation();
+        _project.Workflow.Decisions.Add(decision);
+        _project.IncrementRevision();
+        MarkProjectDirty("Production decision recorded");
+        AddAgentAudit("record_decision", $"{category}: {selected}", true, null);
+        return new { ok = true, revision = _project.Revision, decision };
+    }
+
+    private object UpsertAgentVariant(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var id = AgentPayloadReader.ReadString(payload, "variant_id");
+        var existing = !string.IsNullOrWhiteSpace(id)
+            ? _project.ExportVariants.FirstOrDefault(candidate => candidate.Id == id)
+            : null;
+        if (existing == null && _project.ExportVariants.Count >= 20)
+            return new { ok = false, error = "A project may contain at most 20 export variants" };
+        var name = AgentPayloadReader.ReadString(payload, "name") ?? existing?.Name ?? "Variant";
+        var width = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "width", existing?.Width ?? 1080), 2, 16384));
+        var height = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "height", existing?.Height ?? 1920), 2, 16384));
+        var summary = $"Configure export variant '{name}' at {width}×{height}";
+        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+            return new { ok = false, rejected = true, error = "User rejected export variant change" };
+
+        ExportVariant variant;
+        using (var mutation = _saveCoordinator.BeginMutation())
+        {
+            if (existing == null)
+            {
+                variant = new ExportVariant { Name = name, Width = width, Height = height };
+                _project.ExportVariants.Add(variant);
+            }
+            else
+            {
+                variant = existing;
+                variant.Name = name;
+                variant.Width = width;
+                variant.Height = height;
+            }
+            if (AgentPayloadReader.ReadString(payload, "sequence_id") is { Length: > 0 } sequenceText
+                && Guid.TryParse(sequenceText, out var sequenceGuid))
+                variant.SequenceId = new SequenceId(sequenceGuid);
+            else
+                variant.SequenceId ??= _project.MainSequence?.Id;
+            if (AgentPayloadReader.HasProperty(payload, "fps"))
+                variant.FrameRate = FrameRate.FromDouble(Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "fps", 30), 1, 240));
+            variant.Format = AgentPayloadReader.ReadString(payload, "format") ?? variant.Format;
+            variant.Quality = AgentPayloadReader.ReadString(payload, "quality") ?? variant.Quality;
+            variant.MaximumDurationSeconds = AgentPayloadReader.ReadNullableDouble(payload, "maximum_duration") ?? variant.MaximumDurationSeconds;
+            variant.SafeAreaTopPercent = ClampPercent(payload, "safe_top", variant.SafeAreaTopPercent);
+            variant.SafeAreaRightPercent = ClampPercent(payload, "safe_right", variant.SafeAreaRightPercent);
+            variant.SafeAreaBottomPercent = ClampPercent(payload, "safe_bottom", variant.SafeAreaBottomPercent);
+            variant.SafeAreaLeftPercent = ClampPercent(payload, "safe_left", variant.SafeAreaLeftPercent);
+            variant.ShareTimelineEdits = AgentPayloadReader.ReadBool(payload, "share_timeline_edits", variant.ShareTimelineEdits);
+            if (AgentPayloadReader.TryGetProperty(payload, "overrides", out var overrides) && overrides.ValueKind == JsonValueKind.Object)
+            {
+                variant.Overrides.Clear();
+                foreach (var property in overrides.EnumerateObject()) variant.Overrides[property.Name] = property.Value.ToString();
+            }
+            if (AgentPayloadReader.TryGetProperty(payload, "track_overrides", out var trackOverrides) && trackOverrides.ValueKind == JsonValueKind.Array)
+            {
+                variant.TrackOverrides.Clear();
+                variant.TrackOverrides.AddRange(
+                    JsonSerializer.Deserialize<List<VariantTrackOverride>>(trackOverrides.GetRawText(), AgentPayloadReader.JsonOptions) ?? []);
+            }
+            if (AgentPayloadReader.TryGetProperty(payload, "item_overrides", out var itemOverrides) && itemOverrides.ValueKind == JsonValueKind.Array)
+            {
+                variant.ItemOverrides.Clear();
+                variant.ItemOverrides.AddRange(
+                    JsonSerializer.Deserialize<List<VariantItemOverride>>(itemOverrides.GetRawText(), AgentPayloadReader.JsonOptions) ?? []);
+            }
+            variant.Status = ExportVariantStatus.Ready;
+            _project.IncrementRevision();
+        }
+        MarkProjectDirty("Export variant updated");
+        AddAgentAudit("upsert_variant", summary, true, null);
+        return new { ok = true, revision = _project.Revision, variant };
+    }
+
+    private async Task<object> RenderAgentVariantAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var variantId = AgentPayloadReader.ReadRequiredString(payload, "variant_id");
+        var variant = _project.ExportVariants.FirstOrDefault(candidate => candidate.Id == variantId);
+        if (variant == null) return new { ok = false, error = "Export variant not found" };
+        var sequence = variant.SequenceId is { } sequenceId
+            ? _project.Sequences.FirstOrDefault(candidate => candidate.Id == sequenceId)
+            : _project.MainSequence;
+        if (sequence == null) return new { ok = false, error = "Variant sequence not found" };
+        if (variant.MaximumDurationSeconds.HasValue && sequence.Duration.Seconds > variant.MaximumDurationSeconds.Value + 0.001)
+            return new { ok = false, error = $"Timeline exceeds variant maximum duration of {variant.MaximumDurationSeconds:0.##}s" };
+        var outputPath = ValidateAgentOutputPath(AgentPayloadReader.ReadRequiredString(payload, "output_path"));
+        var summary = $"Render variant '{variant.Name}' to {outputPath}";
+        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+            return new { ok = false, rejected = true, error = "User rejected variant render" };
+
+        variant.Status = ExportVariantStatus.Rendering;
+        var (renderProject, renderSequence) = CreateVariantRenderContext(variant);
+        var format = Enum.TryParse<TimelineExportFormat>(variant.Format, true, out var parsedFormat) ? parsedFormat : TimelineExportFormat.Mp4;
+        var quality = Enum.TryParse<TimelineExportQuality>(variant.Quality, true, out var parsedQuality) ? parsedQuality : TimelineExportQuality.High;
+        var options = new TimelineExportOptions(format, quality, IncludeAudio: true, HardwareEncoding: false);
+        var renderJob = StartAgentRenderJob(
+            payload,
+            RenderJobKind.Variant,
+            outputPath,
+            variant.Width,
+            variant.Height,
+            format.ToString(),
+            quality.ToString(),
+            options.IncludeAudio,
+            options.HardwareEncoding,
+            variantId: variant.Id);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            await _mediaService.ExportTimelineAsync(
+                renderProject,
+                renderSequence,
+                outputPath,
+                cancellationToken: cancellationToken,
+                outputWidth: variant.Width,
+                outputHeight: variant.Height,
+                exportOptions: options);
+            SetAgentRenderJobVerifying(renderJob);
+            var receipt = await _renderReceiptService.CreateAsync(
+                _project,
+                renderSequence,
+                outputPath,
+                variant.Width,
+                variant.Height,
+                options,
+                approvalSource: "agent-variant-render",
+                variantId: variant.Id,
+                cancellationToken);
+            CompleteAgentRenderJob(renderJob, receipt);
+            AddAgentAudit("render_variant", summary, receipt.Status != RenderVerificationStatus.Failed, receipt.Status == RenderVerificationStatus.Failed ? "Verification failed" : null);
+            return new { ok = receipt.Status != RenderVerificationStatus.Failed, revision = _project.Revision, outputPath, renderJob, receipt };
+        }
+        catch (OperationCanceledException)
+        {
+            variant.Status = ExportVariantStatus.Failed;
+            FailAgentRenderJob(renderJob, "Variant render was canceled", canceled: true);
+            AddAgentAudit("render_variant", summary, false, "Variant render was canceled");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            variant.Status = ExportVariantStatus.Failed;
+            FailAgentRenderJob(renderJob, ex.Message);
+            AddAgentAudit("render_variant", summary, false, ex.Message);
+            return new { ok = false, revision = _project.Revision, renderJob, error = ex.Message };
+        }
+    }
+
+    private object RegisterAgentComposition(JsonElement payload)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var spec = ParseCompositionSpec(payload);
+        var validation = _externalCompositionService.Validate(spec, _currentProjectPath);
+        if (!validation.Success) return new { ok = false, errors = validation.Errors, warnings = validation.Warnings };
+        var summary = $"Register local {spec.Kind} composition '{spec.Name}'";
+        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+            return new { ok = false, rejected = true, error = "User rejected composition registration" };
+        using (var mutation = _saveCoordinator.BeginMutation())
+        {
+            var existing = _project.ExternalCompositions.FirstOrDefault(candidate => candidate.Id == spec.Id);
+            if (existing != null) _project.ExternalCompositions.Remove(existing);
+            spec.Status = ExternalCompositionStatus.Validated;
+            _project.ExternalCompositions.Add(spec);
+            _project.IncrementRevision();
+        }
+        MarkProjectDirty("External composition registered");
+        AddAgentAudit("register_composition", summary, true, null);
+        return new { ok = true, revision = _project.Revision, composition = spec, warnings = validation.Warnings };
+    }
+
+    private async Task<object> RenderAgentCompositionAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var id = AgentPayloadReader.ReadRequiredString(payload, "composition_id");
+        var spec = _project.ExternalCompositions.FirstOrDefault(candidate => candidate.Id == id);
+        if (spec == null) return new { ok = false, error = "External composition not found" };
+        var summary = $"Render local {spec.Kind} composition '{spec.Name}'";
+        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+            return new { ok = false, rejected = true, error = "User rejected composition render" };
+
+        var compositionOutputPath = string.IsNullOrWhiteSpace(spec.OutputPath)
+            ? Path.Combine(spec.ProjectDirectory, "renders", $"{spec.Name}.{(spec.TransparentBackground ? "webm" : "mp4")}")
+            : spec.OutputPath;
+        var renderJob = StartAgentRenderJob(
+            payload,
+            RenderJobKind.ExternalComposition,
+            compositionOutputPath,
+            spec.Width,
+            spec.Height,
+            spec.TransparentBackground ? "webm" : Path.GetExtension(compositionOutputPath).TrimStart('.'),
+            "generated",
+            includeAudio: true,
+            hardwareEncoding: false,
+            compositionId: spec.Id);
+
+        ExternalCompositionRenderResult result;
+        try
+        {
+            result = await _externalCompositionService.RenderAsync(spec, _currentProjectPath, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            FailAgentRenderJob(renderJob, "Composition render was canceled", canceled: true);
+            AddAgentAudit("render_composition", summary, false, "Composition render was canceled");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            FailAgentRenderJob(renderJob, ex.Message);
+            AddAgentAudit("render_composition", summary, false, ex.Message);
+            return new { ok = false, revision = _project.Revision, renderJob, error = ex.Message };
+        }
+        if (!result.Success || result.OutputPath == null)
+        {
+            var error = string.Join(" ", result.Errors);
+            FailAgentRenderJob(renderJob, string.IsNullOrWhiteSpace(error) ? "Composition render failed" : error);
+            AddAgentAudit("render_composition", summary, false, error);
+            return new { ok = false, revision = _project.Revision, renderJob, errors = result.Errors, warnings = result.Warnings, verification = result.Verification };
+        }
+
+        var fullOutput = Path.GetFullPath(result.OutputPath);
+        var imported = spec.ImportAfterRender
+            ? _project.MediaLibrary.FirstOrDefault(asset =>
+                string.Equals(Path.GetFullPath(asset.OriginalPath), fullOutput, StringComparison.OrdinalIgnoreCase))
+            : null;
+        var generatedAsset = spec.ImportAfterRender && imported == null
+            ? await CreateGeneratedCompositionAssetAsync(spec, fullOutput)
+            : null;
+        using (var mutation = _saveCoordinator.BeginMutation())
+        {
+            if (generatedAsset != null)
+            {
+                _project.MediaLibrary.Add(generatedAsset);
+                imported = generatedAsset;
+            }
+            _project.IncrementRevision();
+        }
+        if (generatedAsset != null) RefreshMediaList();
+        CompleteAgentRenderJob(renderJob);
+        MarkProjectDirty("External composition rendered and imported");
+        AddAgentAudit("render_composition", summary, true, null);
+        return new
+        {
+            ok = true,
+            revision = _project.Revision,
+            outputPath = result.OutputPath,
+            outputSha256 = result.OutputSha256,
+            renderJob,
+            verification = result.Verification,
+            importedMediaAssetId = imported?.Id.ToString(),
+            warnings = result.Warnings,
+        };
+    }
+
+    private ExternalCompositionSpec ParseCompositionSpec(JsonElement payload)
+    {
+        var kindText = AgentPayloadReader.ReadString(payload, "kind") ?? nameof(ExternalCompositionKind.Remotion);
+        if (!Enum.TryParse<ExternalCompositionKind>(kindText, true, out var kind))
+            throw new InvalidOperationException($"Unknown composition kind '{kindText}'");
+        var fps = Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "fps", 30), 1, 240);
+        var spec = new ExternalCompositionSpec
+        {
+            Id = AgentPayloadReader.ReadString(payload, "composition_id") ?? Guid.NewGuid().ToString("N"),
+            Name = AgentPayloadReader.ReadString(payload, "name") ?? "Generated composition",
+            Kind = kind,
+            ProjectDirectory = AgentPayloadReader.ReadRequiredString(payload, "project_directory"),
+            EntryPoint = AgentPayloadReader.ReadString(payload, "entry_point"),
+            CompositionId = AgentPayloadReader.ReadString(payload, "remotion_composition_id"),
+            OutputPath = AgentPayloadReader.ReadString(payload, "output_path") ?? string.Empty,
+            Width = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "width", 1920), 2, 16384)),
+            Height = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "height", 1080), 2, 16384)),
+            FrameRate = FrameRate.FromDouble(fps),
+            DurationSeconds = Math.Max(0.1, AgentPayloadReader.ReadSeconds(payload, "duration", 5)),
+            TransparentBackground = AgentPayloadReader.ReadBool(payload, "transparent", false),
+            ImportAfterRender = AgentPayloadReader.ReadBool(payload, "import_after_render", true),
+        };
+        if (AgentPayloadReader.TryGetProperty(payload, "parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Object)
+            foreach (var property in parameters.EnumerateObject()) spec.Parameters[property.Name] = property.Value.ToString();
+        return spec;
+    }
+
+    private bool TryValidateAgentRevision(JsonElement payload, out object? conflict)
+    {
+        var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
+        if (baseRevision == _project.Revision)
+        {
+            conflict = null;
+            return true;
+        }
+        conflict = new
+        {
+            ok = false,
+            conflict = true,
+            error = "Project revision conflict. Refresh state before mutating the project.",
+            expectedRevision = _project.Revision,
+            receivedRevision = baseRevision,
+        };
+        return false;
+    }
+
+    private string ValidateAgentOutputPath(string requestedPath)
+    {
+        var allowedDirectory = !string.IsNullOrWhiteSpace(_currentProjectPath)
+            ? Path.GetDirectoryName(Path.GetFullPath(_currentProjectPath))!
+            : Path.Combine(_appData, "agent-exports");
+        Directory.CreateDirectory(allowedDirectory);
+        var output = Path.IsPathRooted(requestedPath)
+            ? Path.GetFullPath(requestedPath)
+            : Path.GetFullPath(Path.Combine(allowedDirectory, requestedPath));
+        var root = allowedDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Agent render output must stay inside the saved Rushframe project directory.");
+        if (output.StartsWith("\\\\", StringComparison.Ordinal) || output.StartsWith("//", StringComparison.Ordinal))
+            throw new InvalidOperationException("Agent render output must use a local drive.");
+        return output;
+    }
+
+    private void ReadyNextWorkflowStage(ProductionWorkflowStage current)
+    {
+        if (current.Status is not (ProductionStageStatus.Completed or ProductionStageStatus.Approved)) return;
+        var index = _project.Workflow.Stages.IndexOf(current);
+        if (index < 0 || index + 1 >= _project.Workflow.Stages.Count) return;
+        var next = _project.Workflow.Stages[index + 1];
+        if (next.Status == ProductionStageStatus.Pending) next.Status = ProductionStageStatus.Ready;
+    }
+
+    private static List<string> ReadStringArray(JsonElement payload, string name)
+    {
+        if (!AgentPayloadReader.TryGetProperty(payload, name, out var value) || value.ValueKind != JsonValueKind.Array) return [];
+        return value.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!).Where(item => !string.IsNullOrWhiteSpace(item)).ToList();
+    }
+
+    private static void ReplaceStringsFromPayload(JsonElement payload, string name, List<string> target)
+    {
+        if (!AgentPayloadReader.HasProperty(payload, name)) return;
+        target.Clear();
+        target.AddRange(ReadStringArray(payload, name));
+    }
+
+    private static int MakeEven(int value) => value % 2 == 0 ? value : value - 1;
+
+    private static double ClampPercent(JsonElement payload, string name, double fallback) =>
+        Math.Clamp(AgentPayloadReader.ReadSeconds(payload, name, fallback), 0, 50);
+
+    private RenderJobRecord StartAgentRenderJob(
+        JsonElement payload,
+        RenderJobKind kind,
+        string outputPath,
+        int width,
+        int height,
+        string format,
+        string quality,
+        bool includeAudio,
+        bool hardwareEncoding,
+        string? variantId = null,
+        string? compositionId = null)
+    {
+        var retryJobId = AgentPayloadReader.ReadString(payload, "retry_job_id");
+        var job = !string.IsNullOrWhiteSpace(retryJobId)
+            ? _project.RenderJobs.FirstOrDefault(candidate => candidate.JobId == retryJobId)
+            : null;
+        using var mutation = _saveCoordinator.BeginMutation();
+        if (job == null)
+        {
+            job = new RenderJobRecord
+            {
+                Kind = kind,
+                OutputPath = outputPath,
+                VariantId = variantId,
+                CompositionId = compositionId,
+                SourceRevision = _project.Revision,
+                Width = width,
+                Height = height,
+                Format = format,
+                Quality = quality,
+                IncludeAudio = includeAudio,
+                HardwareEncoding = hardwareEncoding,
+            };
+            _project.RenderJobs.Add(job);
+        }
+        else
+        {
+            job.Kind = kind;
+            job.OutputPath = outputPath;
+            job.VariantId = variantId;
+            job.CompositionId = compositionId;
+            job.SourceRevision = _project.Revision;
+            job.Width = width;
+            job.Height = height;
+            job.Format = format;
+            job.Quality = quality;
+            job.IncludeAudio = includeAudio;
+            job.HardwareEncoding = hardwareEncoding;
+        }
+        job.Status = RenderJobStatus.Rendering;
+        job.AttemptCount++;
+        job.StartedUtc = DateTimeOffset.UtcNow;
+        job.CompletedUtc = null;
+        job.ReceiptId = null;
+        job.LastError = null;
+        _project.IncrementRevision();
+        MarkProjectDirty("Render job started");
+        return job;
+    }
+
+    private void SetAgentRenderJobVerifying(RenderJobRecord job)
+    {
+        using var mutation = _saveCoordinator.BeginMutation();
+        job.Status = RenderJobStatus.Verifying;
+        _project.IncrementRevision();
+        MarkProjectDirty("Render job verifying");
+    }
+
+    private void CompleteAgentRenderJob(RenderJobRecord job, RenderReceiptDocument? receipt = null)
+    {
+        using var mutation = _saveCoordinator.BeginMutation();
+        job.Status = receipt?.Status == RenderVerificationStatus.Failed
+            ? RenderJobStatus.Failed
+            : RenderJobStatus.Completed;
+        job.ReceiptId = receipt?.ReceiptId;
+        job.LastError = receipt?.Status == RenderVerificationStatus.Failed
+            ? "Render verification failed. Review the linked receipt."
+            : null;
+        job.CompletedUtc = DateTimeOffset.UtcNow;
+        _project.IncrementRevision();
+        MarkProjectDirty("Render job completed");
+    }
+
+    private void FailAgentRenderJob(RenderJobRecord job, string error, bool canceled = false)
+    {
+        using var mutation = _saveCoordinator.BeginMutation();
+        job.Status = canceled ? RenderJobStatus.Canceled : RenderJobStatus.Failed;
+        job.LastError = error;
+        job.CompletedUtc = DateTimeOffset.UtcNow;
+        _project.IncrementRevision();
+        MarkProjectDirty("Render job failed");
+    }
+
+    private async Task<object> RetryAgentRenderJobAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
+        var jobId = AgentPayloadReader.ReadRequiredString(payload, "job_id");
+        var job = _project.RenderJobs.FirstOrDefault(candidate => candidate.JobId == jobId);
+        if (job == null) return new { ok = false, error = "Render job not found" };
+        if (job.Status is not (RenderJobStatus.Failed or RenderJobStatus.Canceled))
+            return new { ok = false, error = $"Only failed or canceled jobs can be retried; current status is {job.Status}" };
+
+        var revisionNote = job.SourceRevision == _project.Revision
+            ? string.Empty
+            : $"\n\nThe project changed from revision {job.SourceRevision} to {_project.Revision}; the retry will use the current project state.";
+        if (AgentPayloadReader.ReadBool(payload, "require_approval", true)
+            && !ConfirmAgentEdit($"Retry {job.Kind} render to {job.OutputPath}?{revisionNote}"))
+            return new { ok = false, rejected = true, error = "User rejected render retry" };
+
+        var values = new Dictionary<string, object?>
+        {
+            ["base_revision"] = _project.Revision,
+            ["require_approval"] = false,
+            ["retry_job_id"] = job.JobId,
+            ["output_path"] = job.OutputPath,
+            ["width"] = job.Width,
+            ["height"] = job.Height,
+            ["format"] = job.Format,
+            ["quality"] = job.Quality,
+            ["include_audio"] = job.IncludeAudio,
+            ["hardware_encoding"] = job.HardwareEncoding,
+        };
+        if (!string.IsNullOrWhiteSpace(job.VariantId)) values["variant_id"] = job.VariantId;
+        if (!string.IsNullOrWhiteSpace(job.CompositionId)) values["composition_id"] = job.CompositionId;
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(values, AgentPayloadReader.JsonOptions));
+        var retryPayload = document.RootElement.Clone();
+        return job.Kind switch
+        {
+            RenderJobKind.Variant => await RenderAgentVariantAsync(retryPayload, cancellationToken),
+            RenderJobKind.ExternalComposition => await RenderAgentCompositionAsync(retryPayload, cancellationToken),
+            _ => await RenderAgentTimelineAsync(retryPayload, cancellationToken),
+        };
+    }
+
+    private object PreviewAgentEditPlan(JsonElement payload)
+    {
+        var sequence = _project.MainSequence;
+        if (sequence == null) return new { ok = false, error = "No active sequence" };
+        var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
+        if (baseRevision != _project.Revision)
+        {
+            return new
+            {
+                ok = false,
+                conflict = true,
+                error = "Timeline revision conflict. Refresh timeline state before previewing the plan.",
+                expectedRevision = _project.Revision,
+                receivedRevision = baseRevision,
+            };
+        }
+
+        var plan = _agentEditPlanCompiler.Compile(_project, sequence, payload, _timeline?.PlayheadTime.Seconds ?? 0);
+        if (!plan.Success)
+            return new { ok = false, planId = plan.PlanId, error = plan.Error };
+        return new
+        {
+            ok = true,
+            preview = true,
+            planId = plan.PlanId,
+            summary = plan.Summary,
+            baseRevision = _project.Revision,
+            operationCount = plan.Operations.Count,
+            operations = plan.Operations,
+            affectedRanges = plan.AffectedRanges,
+            warnings = plan.Warnings,
+            requiresApproval = true,
+        };
+    }
+
+    private async Task<object> ApplyAgentEditPlanAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var sequence = _project.MainSequence;
+        if (sequence == null) return new { ok = false, error = "No active sequence" };
+        var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
+        if (baseRevision != _project.Revision)
+        {
+            AddAgentAudit("apply_plan", "Rejected stale or missing edit-plan revision", false,
+                $"Expected revision {_project.Revision}, received {baseRevision?.ToString() ?? "missing"}");
+            return new
+            {
+                ok = false,
+                conflict = true,
+                error = "Timeline revision conflict. Refresh timeline state before applying the plan.",
+                expectedRevision = _project.Revision,
+                receivedRevision = baseRevision,
+            };
+        }
+
+        var plan = _agentEditPlanCompiler.Compile(_project, sequence, payload, _timeline?.PlayheadTime.Seconds ?? 0);
+        if (!plan.Success || plan.Command == null)
+        {
+            AddAgentAudit("apply_plan", plan.Summary, false, plan.Error);
+            return new { ok = false, planId = plan.PlanId, error = plan.Error };
+        }
+
+        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", true);
+        if (requireApproval
+            && new AgentEditPlanPreviewDialog(this, plan).ShowDialog() != true)
+        {
+            AddAgentAudit("apply_plan", plan.Summary, false, "User rejected edit plan");
+            return new { ok = false, rejected = true, planId = plan.PlanId, error = "User rejected edit plan" };
+        }
+
+        using var mutation = _saveCoordinator.BeginMutation();
+        var result = _undoRedo.Execute(sequence, plan.Command);
+        if (!result.Success)
+        {
+            AddAgentAudit("apply_plan", plan.Summary, false, result.ErrorMessage ?? "Edit plan failed");
+            return new { ok = false, planId = plan.PlanId, error = result.ErrorMessage ?? "Edit plan failed" };
+        }
+
+        var appliedRevision = _project.IncrementRevision();
+        _project.AgentEditPlans.Add(new AgentEditPlanRecord
+        {
+            PlanId = plan.PlanId,
+            Summary = plan.Summary,
+            BaseRevision = baseRevision.Value,
+            AppliedRevision = appliedRevision,
+            Status = AgentEditPlanStatus.Applied,
+            AppliedUtc = DateTimeOffset.UtcNow,
+            Operations = { },
+        });
+        var record = _project.AgentEditPlans[^1];
+        record.Operations.AddRange(plan.Operations);
+        record.AffectedRanges.AddRange(plan.AffectedRanges);
+        record.Warnings.AddRange(plan.Warnings);
+        AdvanceWorkflowAfterAgentPlan(record);
+
+        _timelinePreviewDirty = true;
+        if (_timeline != null) _timeline.ProjectRevision = _project.Revision;
+        CommandManager.InvalidateRequerySuggested();
+        MarkProjectDirty("Agent edit plan applied");
+        StatusText.Text = $"Agent plan applied: {plan.Summary}";
+        AddAgentAudit("apply_plan", plan.Summary, true, null);
+        await Task.CompletedTask.WaitAsync(cancellationToken);
+        return new
+        {
+            ok = true,
+            applied = true,
+            planId = plan.PlanId,
+            summary = plan.Summary,
+            revision = _project.Revision,
+            operations = plan.Operations,
+            affectedRanges = plan.AffectedRanges,
+            warnings = plan.Warnings,
+            timeline = BuildAgentTimelineState(),
+        };
+    }
+
+    private void AdvanceWorkflowAfterAgentPlan(AgentEditPlanRecord record)
+    {
+        _project.Workflow.EnsureDefaults();
+        var stage = _project.Workflow.Stages.FirstOrDefault(value => value.Id == "agent_draft");
+        if (stage == null) return;
+        stage.Status = ProductionStageStatus.AwaitingApproval;
+        stage.StartedUtc ??= record.CreatedUtc;
+        stage.Summary = record.Summary;
+        stage.Revision++;
+        stage.Outputs.Clear();
+        stage.Outputs.Add($"edit-plan:{record.PlanId}");
+        stage.Warnings.Clear();
+        stage.Warnings.AddRange(record.Warnings);
+        _project.Workflow.ActiveStageId = "agent_draft";
     }
 
     private object BuildAgentTimelineState()
@@ -1697,12 +3082,18 @@ public partial class MainWindow : Window
         return new
         {
             ok = true,
+            schemaVersion = _project.SchemaVersion,
+            revision = _project.Revision,
+            modifiedUtc = _project.ModifiedUtc,
             projectPath = _currentProjectPath,
             sequence = new
             {
                 id = sequence.Id.ToString(),
                 name = sequence.Name,
                 duration = sequence.Duration.Seconds,
+                frameRate = new { numerator = sequence.FrameRate.Numerator, denominator = sequence.FrameRate.Denominator, value = sequence.FrameRate.Value },
+                background = sequence.Background,
+                layoutGuides = sequence.LayoutGuides,
                 tracks = sequence.Tracks.Select((track, index) => new
                 {
                     index,
@@ -1728,6 +3119,17 @@ public partial class MainWindow : Window
                             sourceStart = item.SourceStart.Seconds,
                             sourceDuration = item.SourceDuration.Seconds,
                             text = item.TextContent,
+                            animations = item.AnimationChannels.Select(channel => new
+                            {
+                                property = channel.PropertyName,
+                                defaultValue = channel.DefaultValue,
+                                keyframes = channel.Keyframes.Select(keyframe => new
+                                {
+                                    time = keyframe.Time.Seconds,
+                                    value = keyframe.Value,
+                                    interpolation = keyframe.Interpolation.ToString(),
+                                }),
+                            }),
                             effects = item.Effects.Select(effect => new
                             {
                                 id = effect.Id.ToString(),
@@ -1764,13 +3166,33 @@ public partial class MainWindow : Window
         if (sequence == null)
             return new { ok = false, error = "No active sequence" };
 
-        var action = ReadString(payload, "action");
+        var action = AgentPayloadReader.ReadString(payload, "action");
         if (string.IsNullOrWhiteSpace(action))
             return new { ok = false, error = "Missing action" };
 
-        var requireApproval = ReadBool(payload, "require_approval", true);
-        var previewOnly = ReadBool(payload, "preview_only", false);
-        var edit = BuildAgentEditCommand(sequence, payload, action);
+        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", true);
+        var previewOnly = AgentPayloadReader.ReadBool(payload, "preview_only", false);
+        var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
+        if (!previewOnly && baseRevision != _project.Revision)
+        {
+            AddAgentAudit(action, "Rejected stale or missing base revision", false,
+                $"Expected revision {_project.Revision}, received {baseRevision?.ToString() ?? "missing"}");
+            return new
+            {
+                ok = false,
+                conflict = true,
+                error = "Timeline revision conflict. Refresh timeline state before applying edits.",
+                expectedRevision = _project.Revision,
+                receivedRevision = baseRevision,
+            };
+        }
+
+        var edit = _agentEditCommandFactory.Build(
+            _project,
+            sequence,
+            payload,
+            action,
+            _timeline?.PlayheadTime.Seconds ?? 0);
         if (!edit.Success || edit.Command == null)
             return new { ok = false, error = edit.Error };
 
@@ -1783,6 +3205,7 @@ public partial class MainWindow : Window
             return new { ok = false, rejected = true, error = "User rejected edit" };
         }
 
+        using var mutation = _saveCoordinator.BeginMutation();
         var result = _undoRedo.Execute(sequence, edit.Command);
         if (!result.Success)
         {
@@ -1790,13 +3213,15 @@ public partial class MainWindow : Window
             return new { ok = false, error = result.ErrorMessage ?? "Edit failed" };
         }
 
-        _timeline?.InvalidateVisual();
+        _project.IncrementRevision();
+        _timelinePreviewDirty = true;
+        if (_timeline != null) _timeline.ProjectRevision = _project.Revision;
         CommandManager.InvalidateRequerySuggested();
-        SaveAutosaveSnapshot();
+        MarkProjectDirty("Agent edit applied");
         StatusText.Text = $"Agent edit applied: {edit.Summary}";
         AddAgentAudit(action, edit.Summary, true, null);
         await Task.CompletedTask.WaitAsync(cancellationToken);
-        return new { ok = true, applied = true, summary = edit.Summary, timeline = BuildAgentTimelineState() };
+        return new { ok = true, applied = true, summary = edit.Summary, revision = _project.Revision, timeline = BuildAgentTimelineState() };
     }
 
     private async Task<object> RenderAgentTimelineAsync(JsonElement payload, CancellationToken cancellationToken)
@@ -1805,14 +3230,38 @@ public partial class MainWindow : Window
         if (sequence == null)
             return new { ok = false, error = "No active sequence" };
 
-        var outputPath = ReadString(payload, "output_path");
-        if (string.IsNullOrWhiteSpace(outputPath))
+        var requestedOutputPath = AgentPayloadReader.ReadString(payload, "output_path");
+        if (string.IsNullOrWhiteSpace(requestedOutputPath))
             return new { ok = false, error = "Missing output_path" };
+        string outputPath;
+        try
+        {
+            outputPath = ValidateAgentOutputPath(requestedOutputPath);
+        }
+        catch (Exception ex)
+        {
+            return new { ok = false, error = ex.Message };
+        }
 
         if (sequence.Duration.Seconds > _settings.MaxOutputDurationSeconds)
-            return new { ok = false, error = "Timeline exceeds the 3-minute export limit" };
+            return new { ok = false, error = $"Timeline exceeds the {_settings.MaxOutputDurationSeconds}-second export limit" };
 
-        var requireApproval = ReadBool(payload, "require_approval", true);
+        var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
+        if (baseRevision != _project.Revision)
+        {
+            AddAgentAudit("render_timeline", "Rejected stale or missing render revision", false,
+                $"Expected revision {_project.Revision}, received {baseRevision?.ToString() ?? "missing"}");
+            return new
+            {
+                ok = false,
+                conflict = true,
+                error = "Timeline revision conflict. Refresh timeline state before rendering.",
+                expectedRevision = _project.Revision,
+                receivedRevision = baseRevision,
+            };
+        }
+
+        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", true);
         var summary = $"Render timeline to {outputPath}";
         if (requireApproval && !ConfirmAgentEdit(summary))
         {
@@ -1820,194 +3269,77 @@ public partial class MainWindow : Window
             return new { ok = false, rejected = true, error = "User rejected render" };
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? Environment.CurrentDirectory);
-        await _mediaService.ExportTimelineAsync(_project, sequence, outputPath);
-        AddAgentAudit("render_timeline", summary, true, null);
-        StatusText.Text = $"Agent render completed: {Path.GetFileName(outputPath)}";
-        return new { ok = true, outputPath };
-    }
+        var width = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "width", sequence.Width), 2, 16384));
+        var height = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "height", sequence.Height), 2, 16384));
+        var formatText = AgentPayloadReader.ReadString(payload, "format") ?? Path.GetExtension(outputPath).TrimStart('.');
+        var format = formatText.ToLowerInvariant() switch
+        {
+            "webm" => TimelineExportFormat.WebM,
+            "mov" => TimelineExportFormat.Mov,
+            "mkv" => TimelineExportFormat.Mkv,
+            _ => TimelineExportFormat.Mp4,
+        };
+        var qualityText = AgentPayloadReader.ReadString(payload, "quality") ?? nameof(TimelineExportQuality.High);
+        if (!Enum.TryParse<TimelineExportQuality>(qualityText, true, out var quality))
+            return new { ok = false, error = $"Unknown export quality '{qualityText}'" };
+        var options = new TimelineExportOptions(
+            format,
+            quality,
+            IncludeAudio: AgentPayloadReader.ReadBool(payload, "include_audio", true),
+            HardwareEncoding: AgentPayloadReader.ReadBool(payload, "hardware_encoding", false));
+        var renderJob = StartAgentRenderJob(
+            payload,
+            RenderJobKind.Timeline,
+            outputPath,
+            width,
+            height,
+            format.ToString(),
+            quality.ToString(),
+            options.IncludeAudio,
+            options.HardwareEncoding);
 
-    private AgentEditBuildResult BuildAgentEditCommand(Sequence sequence, JsonElement payload, string action)
-    {
         try
         {
-            return action.Trim().ToLowerInvariant() switch
-            {
-                "add_text" or "add_caption" => BuildAddTextAgentCommand(sequence, payload),
-                "add_clip" or "add_music" => BuildAddMediaAgentCommand(sequence, payload),
-                "move_clip" => BuildMoveClipAgentCommand(sequence, payload),
-                "trim_clip" => BuildTrimClipAgentCommand(sequence, payload),
-                "split_clip" => BuildSplitClipAgentCommand(sequence, payload),
-                "delete_clip" => BuildDeleteClipAgentCommand(sequence, payload),
-                "add_transition" => BuildTransitionAgentCommand(payload),
-                "add_effect" => BuildEffectAgentCommand(payload),
-                _ => AgentEditBuildResult.Fail($"Unsupported action: {action}"),
-            };
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            await _mediaService.ExportTimelineAsync(
+                _project,
+                sequence,
+                outputPath,
+                cancellationToken: cancellationToken,
+                outputWidth: width,
+                outputHeight: height,
+                exportOptions: options);
+            SetAgentRenderJobVerifying(renderJob);
+            var receipt = await _renderReceiptService.CreateAsync(
+                _project,
+                sequence,
+                outputPath,
+                width,
+                height,
+                options,
+                approvalSource: "agent-timeline-render",
+                cancellationToken: cancellationToken);
+            CompleteAgentRenderJob(renderJob, receipt);
+            var passed = receipt.Status != RenderVerificationStatus.Failed;
+            AddAgentAudit("render_timeline", summary, passed, passed ? null : "Render verification failed");
+            StatusText.Text = passed
+                ? $"Agent render verified: {Path.GetFileName(outputPath)}"
+                : $"Agent render failed verification: {Path.GetFileName(outputPath)}";
+            return new { ok = passed, outputPath, revision = _project.Revision, renderJob, receipt };
+        }
+        catch (OperationCanceledException)
+        {
+            FailAgentRenderJob(renderJob, "Render was canceled", canceled: true);
+            AddAgentAudit("render_timeline", summary, false, "Render was canceled");
+            throw;
         }
         catch (Exception ex)
         {
-            return AgentEditBuildResult.Fail(ex.Message);
+            FailAgentRenderJob(renderJob, ex.Message);
+            AddAgentAudit("render_timeline", summary, false, ex.Message);
+            return new { ok = false, revision = _project.Revision, renderJob, error = ex.Message };
         }
     }
-
-    private AgentEditBuildResult BuildAddTextAgentCommand(Sequence sequence, JsonElement payload)
-    {
-        var track = ResolveTrack(sequence, payload, TrackKind.Text);
-        if (track == null) return AgentEditBuildResult.Fail("No text track found. Add a text track in Rushframe first.");
-        var text = ReadString(payload, "text");
-        if (string.IsNullOrWhiteSpace(text)) return AgentEditBuildResult.Fail("Missing text");
-        var start = ReadSeconds(payload, "start", _timeline?.PlayheadTime.Seconds ?? 0);
-        var duration = ReadSeconds(payload, "duration", 3);
-        var item = new TimelineItem
-        {
-            Kind = ItemKind.Text,
-            TimelineStart = MediaTime.FromSeconds(start),
-            Duration = MediaTime.FromSeconds(Math.Max(0.1, duration)),
-            SourceDuration = MediaTime.FromSeconds(Math.Max(0.1, duration)),
-            TextContent = text,
-            FontSize = ReadSeconds(payload, "font_size", 48),
-            FillColor = ReadString(payload, "fill_color") ?? "#FFFFFF",
-            OutlineColor = ReadString(payload, "outline_color"),
-            OutlineWidth = ReadSeconds(payload, "outline_width", 0),
-        };
-        return AgentEditBuildResult.Ok(
-            new AddClipCommand { TrackId = track.Id, Item = item },
-            $"Add text at {start:0.##}s for {duration:0.##}s");
-    }
-
-    private AgentEditBuildResult BuildAddMediaAgentCommand(Sequence sequence, JsonElement payload)
-    {
-        var assetId = ParseMediaAssetId(ReadRequiredString(payload, "media_asset_id"));
-        var asset = _project.MediaLibrary.FirstOrDefault(candidate => candidate.Id == assetId);
-        if (asset == null) return AgentEditBuildResult.Fail("Media asset not found");
-        var defaultTrackKind = asset.Kind == MediaKind.Audio ? TrackKind.Audio : TrackKind.Video;
-        var track = ResolveTrack(sequence, payload, defaultTrackKind);
-        if (track == null) return AgentEditBuildResult.Fail($"No compatible {defaultTrackKind} track found.");
-        var start = ReadSeconds(payload, "start", _timeline?.PlayheadTime.Seconds ?? 0);
-        var sourceStart = ReadSeconds(payload, "source_start", 0);
-        var duration = ReadSeconds(payload, "duration", asset.Duration.Seconds > 0 ? asset.Duration.Seconds : 5);
-        var kind = asset.Kind == MediaKind.Image ? ItemKind.Image : ItemKind.Clip;
-        var item = new TimelineItem
-        {
-            Kind = kind,
-            MediaAssetId = asset.Id,
-            TimelineStart = MediaTime.FromSeconds(start),
-            Duration = MediaTime.FromSeconds(Math.Max(0.1, duration)),
-            SourceStart = MediaTime.FromSeconds(Math.Max(0, sourceStart)),
-            SourceDuration = MediaTime.FromSeconds(Math.Max(0.1, duration)),
-        };
-        return AgentEditBuildResult.Ok(
-            new AddClipCommand { TrackId = track.Id, Item = item },
-            $"Add {Path.GetFileName(asset.OriginalPath)} at {start:0.##}s");
-    }
-
-    private static AgentEditBuildResult BuildMoveClipAgentCommand(Sequence sequence, JsonElement payload)
-    {
-        var itemId = ParseTimelineItemId(ReadRequiredString(payload, "item_id"));
-        TrackId? targetTrackId = ReadString(payload, "track_id") is { } trackIdText && !string.IsNullOrWhiteSpace(trackIdText)
-            ? ParseTrackId(trackIdText)
-            : null;
-        var command = new MoveClipCommand
-        {
-            ItemId = itemId,
-            TargetTrackId = targetTrackId,
-            NewTimelineStart = HasProperty(payload, "start") ? MediaTime.FromSeconds(ReadSeconds(payload, "start", 0)) : null,
-        };
-        return sequence.Tracks.SelectMany(track => track.Items).Any(item => item.Id == itemId)
-            ? AgentEditBuildResult.Ok(command, $"Move clip {itemId}")
-            : AgentEditBuildResult.Fail("Clip not found");
-    }
-
-    private static AgentEditBuildResult BuildTrimClipAgentCommand(Sequence sequence, JsonElement payload)
-    {
-        var itemId = ParseTimelineItemId(ReadRequiredString(payload, "item_id"));
-        var track = ResolveTrackForItem(sequence, itemId);
-        if (track == null) return AgentEditBuildResult.Fail("Clip not found");
-        var command = new TrimClipCommand
-        {
-            TrackId = track.Id,
-            ItemId = itemId,
-            NewStart = HasProperty(payload, "start") ? MediaTime.FromSeconds(ReadSeconds(payload, "start", 0)) : null,
-            NewDuration = HasProperty(payload, "duration") ? MediaTime.FromSeconds(ReadSeconds(payload, "duration", 0)) : null,
-            NewSourceStart = HasProperty(payload, "source_start") ? MediaTime.FromSeconds(ReadSeconds(payload, "source_start", 0)) : null,
-        };
-        return AgentEditBuildResult.Ok(command, $"Trim clip {itemId}");
-    }
-
-    private static AgentEditBuildResult BuildSplitClipAgentCommand(Sequence sequence, JsonElement payload)
-    {
-        var itemId = ParseTimelineItemId(ReadRequiredString(payload, "item_id"));
-        var track = ResolveTrackForItem(sequence, itemId);
-        if (track == null) return AgentEditBuildResult.Fail("Clip not found");
-        var splitTime = ReadSeconds(payload, "time", 0);
-        return AgentEditBuildResult.Ok(
-            new Domain.Editing.SplitClipCommand
-            {
-                TrackId = track.Id,
-                ItemId = itemId,
-                SplitTime = MediaTime.FromSeconds(splitTime),
-            },
-            $"Split clip {itemId} at {splitTime:0.##}s");
-    }
-
-    private static AgentEditBuildResult BuildDeleteClipAgentCommand(Sequence sequence, JsonElement payload)
-    {
-        var itemId = ParseTimelineItemId(ReadRequiredString(payload, "item_id"));
-        return sequence.Tracks.SelectMany(track => track.Items).Any(item => item.Id == itemId)
-            ? AgentEditBuildResult.Ok(new DeleteClipCommand { ItemId = itemId }, $"Delete clip {itemId}")
-            : AgentEditBuildResult.Fail("Clip not found");
-    }
-
-    private static AgentEditBuildResult BuildTransitionAgentCommand(JsonElement payload)
-    {
-        var left = ParseTimelineItemId(ReadRequiredString(payload, "left_item_id"));
-        var right = ParseTimelineItemId(ReadRequiredString(payload, "right_item_id"));
-        var kindText = ReadString(payload, "kind") ?? nameof(TransitionKind.CrossDissolve);
-        if (!Enum.TryParse<TransitionKind>(kindText, ignoreCase: true, out var kind))
-            kind = TransitionKind.CrossDissolve;
-        var duration = ReadSeconds(payload, "duration", 0.5);
-        var alignment = ReadSeconds(payload, "alignment", 0.5);
-        return AgentEditBuildResult.Ok(
-            new ApplyTransitionCommand
-            {
-                LeftItemId = left,
-                RightItemId = right,
-                Kind = kind,
-                Duration = MediaTime.FromSeconds(Math.Max(0.05, duration)),
-                Alignment = Math.Clamp(alignment, 0, 1),
-            },
-            $"Apply {kind} transition");
-    }
-
-    private static AgentEditBuildResult BuildEffectAgentCommand(JsonElement payload)
-    {
-        var itemId = ParseTimelineItemId(ReadRequiredString(payload, "item_id"));
-        var effectTypeId = ReadRequiredString(payload, "effect_type_id");
-        var parameters = ReadObject(payload, "parameters");
-        return AgentEditBuildResult.Ok(
-            new AddEffectCommand
-            {
-                ItemId = itemId,
-                EffectTypeId = effectTypeId,
-                Parameters = parameters,
-            },
-            $"Add effect {effectTypeId}");
-    }
-
-    private Track? ResolveTrack(Sequence sequence, JsonElement payload, TrackKind fallbackKind)
-    {
-        var trackIdText = ReadString(payload, "track_id");
-        if (!string.IsNullOrWhiteSpace(trackIdText))
-        {
-            var trackId = ParseTrackId(trackIdText);
-            return sequence.Tracks.FirstOrDefault(track => track.Id == trackId);
-        }
-
-        return sequence.Tracks.FirstOrDefault(track => track.Kind == fallbackKind && !track.Locked);
-    }
-
-    private static Track? ResolveTrackForItem(Sequence sequence, TimelineItemId itemId) =>
-        sequence.Tracks.FirstOrDefault(track => track.Items.Any(item => item.Id == itemId));
 
     private bool ConfirmAgentEdit(string summary) =>
         MessageBox.Show(
@@ -2019,64 +3351,30 @@ public partial class MainWindow : Window
 
     private void AddAgentAudit(string action, string summary, bool success, string? error)
     {
-        _agentAuditLog.Add(new AgentAuditEntry(
+        var record = new AgentAuditRecord(
             DateTimeOffset.UtcNow,
+            _project.Id,
+            _project.Revision,
             action,
             summary,
             success,
-            error));
+            error,
+            _localAgentBridge.SessionId);
+        _agentAuditLog.Add(record);
+        _agentAuditLogService.Append(record);
         if (_agentAuditLog.Count > 200)
             _agentAuditLog.RemoveRange(0, _agentAuditLog.Count - 200);
     }
 
-    private static bool HasProperty(JsonElement payload, string name) =>
-        payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty(name, out _);
-
-    private static string? ReadString(JsonElement payload, string name) =>
-        payload.ValueKind == JsonValueKind.Object
-        && payload.TryGetProperty(name, out var value)
-        && value.ValueKind != JsonValueKind.Null
-            ? value.ToString()
-            : null;
-
-    private static string ReadRequiredString(JsonElement payload, string name) =>
-        ReadString(payload, name) is { Length: > 0 } value
-            ? value
-            : throw new InvalidOperationException($"Missing {name}");
-
-    private static double ReadSeconds(JsonElement payload, string name, double fallback)
+    private void ShowKeyboardShortcutsDialog()
     {
-        if (payload.ValueKind != JsonValueKind.Object || !payload.TryGetProperty(name, out var value))
-            return fallback;
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
-            return number;
-        return double.TryParse(value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : fallback;
+        var configured = new Dialogs.KeyboardShortcutsDialog(this, _actionRegistry, _settings.Keybindings).Show();
+        if (configured == null) return;
+        _settings.Keybindings = configured;
+        _settingsService.Save("editor", _settings);
+        _actionRegistry.ApplyInputBindings(this, _settings.Keybindings);
+        StatusText.Text = "Keyboard shortcuts updated";
     }
-
-    private static bool ReadBool(JsonElement payload, string name, bool fallback)
-    {
-        if (payload.ValueKind != JsonValueKind.Object || !payload.TryGetProperty(name, out var value))
-            return fallback;
-        return value.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            _ => bool.TryParse(value.ToString(), out var parsed) ? parsed : fallback,
-        };
-    }
-
-    private static Dictionary<string, object> ReadObject(JsonElement payload, string name)
-    {
-        if (payload.ValueKind != JsonValueKind.Object || !payload.TryGetProperty(name, out var value))
-            return [];
-        return JsonSerializer.Deserialize<Dictionary<string, object>>(value.GetRawText()) ?? [];
-    }
-
-    private static TimelineItemId ParseTimelineItemId(string value) => new(Guid.Parse(value));
-    private static TrackId ParseTrackId(string value) => new(Guid.Parse(value));
-    private static MediaAssetId ParseMediaAssetId(string value) => new(Guid.Parse(value));
 
     private void ShowSettingsDialog()
     {
@@ -2085,6 +3383,8 @@ public partial class MainWindow : Window
         var rippleToggle = new CheckBox { Content = "Ripple editing by default", IsChecked = RippleToggle.IsChecked ?? false, Margin = new Thickness(0, 8, 0, 0) };
         var autosaveToggle = new CheckBox { Content = "Enable autosave", IsChecked = _settings.AutosaveEnabled, Margin = new Thickness(0, 14, 0, 0) };
         var autosaveBox = new TextBox { Text = Math.Clamp(_settings.AutosaveIntervalSeconds, 5, 3600).ToString(CultureInfo.InvariantCulture), Width = 92 };
+        var previewFpsBox = new TextBox { Text = Math.Clamp(_settings.PreviewMaxFps, 15, 60).ToString(CultureInfo.InvariantCulture), Width = 92 };
+        var previewWidthBox = new TextBox { Text = Math.Clamp(_settings.PreviewMaxWidth, 480, 1920).ToString(CultureInfo.InvariantCulture), Width = 92 };
         var backendToggle = new CheckBox { Content = "Start media-intelligence backend with Rushframe", IsChecked = _settings.StartIntelligenceBackend };
         var aiInputBox = new TextBox
         {
@@ -2134,7 +3434,7 @@ public partial class MainWindow : Window
         var dialog = CreateOwnedDialog(
             "Rushframe Settings",
             width: 500,
-            height: 680,
+            height: 760,
             minimumWidth: 440,
             minimumHeight: 560,
             resizeMode: ResizeMode.NoResize);
@@ -2189,6 +3489,15 @@ public partial class MainWindow : Window
         uiScaleRow.Children.Add(uiScaleSlider);
         uiScaleRow.Children.Add(uiScaleText);
         panel.Children.Add(uiScaleRow);
+        var shortcutsButton = new Button
+        {
+            Content = "Configure Keyboard Shortcuts",
+            Style = (Style)FindResource("CommandButtonStyle"),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 12, 0, 0),
+        };
+        shortcutsButton.Click += (_, _) => ShowKeyboardShortcutsDialog();
+        panel.Children.Add(shortcutsButton);
         panel.Children.Add(new TextBlock
         {
             Text = "Interface shortcuts: Ctrl++ enlarges the UI, Ctrl+- reduces it, and Ctrl+0 resets it.",
@@ -2196,6 +3505,41 @@ public partial class MainWindow : Window
             FontSize = 10,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 12, 0, 0),
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Preview performance",
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)FindResource("TextBrush"),
+            Margin = new Thickness(0, 20, 0, 8),
+        });
+        var previewFpsRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        previewFpsRow.Children.Add(new TextBlock
+        {
+            Text = "Maximum preview FPS",
+            Foreground = (Brush)FindResource("TextSecondaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Width = 180,
+        });
+        previewFpsRow.Children.Add(previewFpsBox);
+        panel.Children.Add(previewFpsRow);
+        var previewWidthRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        previewWidthRow.Children.Add(new TextBlock
+        {
+            Text = "Draft preview width",
+            Foreground = (Brush)FindResource("TextSecondaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Width = 180,
+        });
+        previewWidthRow.Children.Add(previewWidthBox);
+        panel.Children.Add(previewWidthRow);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Lower values reduce CPU/GPU load. Exact preview and final export remain composition-correct.",
+            Foreground = (Brush)FindResource("TextMutedBrush"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
         });
         panel.Children.Add(new TextBlock
         {
@@ -2217,7 +3561,7 @@ public partial class MainWindow : Window
         panel.Children.Add(autosaveRow);
         panel.Children.Add(new TextBlock
         {
-            Text = "Media Intelligence",
+            Text = "AI",
             FontWeight = FontWeights.SemiBold,
             Foreground = (Brush)FindResource("TextBrush"),
             Margin = new Thickness(0, 20, 0, 8),
@@ -2290,6 +3634,10 @@ public partial class MainWindow : Window
                 interval = _settings.AutosaveIntervalSeconds;
             if (!int.TryParse(aiInputBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var aiInputSeconds))
                 aiInputSeconds = _settings.MaxAiInputSeconds;
+            if (!int.TryParse(previewFpsBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var previewFps))
+                previewFps = _settings.PreviewMaxFps;
+            if (!int.TryParse(previewWidthBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var previewWidth))
+                previewWidth = _settings.PreviewMaxWidth;
 
             _settings = new EditorSettings
             {
@@ -2297,6 +3645,9 @@ public partial class MainWindow : Window
                 RippleEnabled = rippleToggle.IsChecked ?? false,
                 TimelineZoom = Math.Clamp(zoomSlider.Value, ZoomSlider.Minimum, ZoomSlider.Maximum),
                 UiScale = Math.Clamp(uiScaleSlider.Value, MinimumUiScale, MaximumUiScale),
+                PreviewMaxFps = Math.Clamp(previewFps, 15, 60),
+                PreviewMaxWidth = Math.Clamp(previewWidth, 480, 1920),
+                PreviewLookAheadSeconds = Math.Clamp(_settings.PreviewLookAheadSeconds, 0, 2),
                 AutosaveEnabled = autosaveToggle.IsChecked ?? true,
                 AutosaveIntervalSeconds = Math.Clamp(interval, 5, 3600),
                 StartIntelligenceBackend = backendToggle.IsChecked ?? true,
@@ -2304,6 +3655,7 @@ public partial class MainWindow : Window
                 ProtectedGeminiApiKey = SecretProtectionService.Protect(geminiKeyBox.Password),
                 MaxAiInputSeconds = Math.Clamp(aiInputSeconds, 30, 1800),
                 MaxOutputDurationSeconds = 180,
+                Keybindings = new Dictionary<string, string>(_settings.Keybindings),
             };
             _settingsService.Save("editor", _settings);
             ApplyEditorSettings();
@@ -2322,645 +3674,6 @@ public partial class MainWindow : Window
         dialog.Content = CreateDialogFrame(dialog, "Settings", root, new Thickness(18));
         if (dialog.ShowDialog() != true)
             StatusText.Text = "Settings unchanged";
-    }
-
-    private bool ConfirmCanReplaceCurrentProject()
-    {
-        if (!_projectDirty) return true;
-
-        var answer = MessageBox.Show(
-            this,
-            "Save changes to the current project before opening another project?",
-            "Unsaved Changes",
-            MessageBoxButton.YesNoCancel,
-            MessageBoxImage.Warning);
-
-        if (answer == MessageBoxResult.Cancel) return false;
-        if (answer == MessageBoxResult.Yes && !SaveCurrentProject()) return false;
-        return true;
-    }
-
-    private void OnWindowClosing(object? sender, CancelEventArgs e)
-    {
-        if (_allowClose || !_projectDirty) return;
-
-        var answer = MessageBox.Show(
-            this,
-            "Save changes to the current project before closing?",
-            "Unsaved Changes",
-            MessageBoxButton.YesNoCancel,
-            MessageBoxImage.Warning);
-
-        if (answer == MessageBoxResult.Cancel)
-        {
-            e.Cancel = true;
-            return;
-        }
-
-        if (answer == MessageBoxResult.Yes)
-        {
-            SaveCurrentProject();
-            if (_projectDirty)
-            {
-                e.Cancel = true;
-                return;
-            }
-        }
-
-        _allowClose = true;
-    }
-
-    private void MarkProjectDirty(string status)
-    {
-        _projectDirty = true;
-        StatusText.Text = status;
-    }
-
-    private bool SaveCurrentProject()
-    {
-        var path = _currentProjectPath;
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            var dialog = new SaveFileDialog
-            {
-                Filter = "Rushframe Project (*.rushframe)|*.rushframe",
-                FileName = _project.Name + ".rushframe",
-            };
-            if (dialog.ShowDialog() != true) return false;
-            path = dialog.FileName;
-        }
-
-        _projectRepo.Save(_project, path);
-        _currentProjectPath = path;
-        ProjectNameText.Text = Path.GetFileNameWithoutExtension(path);
-        _projectDirty = false;
-        StatusText.Text = "Project saved";
-        return true;
-    }
-
-    private void Execute(IEditCommand cmd)
-    {
-        var sequence = _project.MainSequence;
-        if (sequence == null) return;
-
-        var result = _undoRedo.Execute(sequence, cmd);
-        if (!result.Success)
-        {
-            StatusText.Text = result.ErrorMessage ?? "The edit could not be applied.";
-            return;
-        }
-
-        if (_selectedInspectorItem != null
-            && !sequence.Tracks.SelectMany(track => track.Items).Any(item => item.Id == _selectedInspectorItem.Id))
-        {
-            _selectedInspectorItem = null;
-            _selectedTransitionSelection = null;
-            _timeline?.ClearSelection();
-        }
-
-        _timeline?.InvalidateVisual();
-        UpdateInspector(_selectedInspectorItem);
-        MarkProjectDirty("Project modified");
-        SaveAutosaveSnapshot();
-        CommandManager.InvalidateRequerySuggested();
-    }
-
-    private void LoadProjectIntoEditor(Project project, string? projectPath, string displayName)
-    {
-        _project = project;
-        _currentProjectPath = projectPath;
-        _undoRedo.Clear();
-        _clipboard = null;
-        _selectedInspectorItem = null;
-        _selectedTransitionSelection = null;
-        _contextTrackIndex = -1;
-        _lastSelectedTrackIndex = 0;
-        _projectDirty = false;
-        if (_timeline != null) _timeline.Sequence = _project.MainSequence;
-        ProjectNameText.Text = string.IsNullOrWhiteSpace(displayName) ? "Untitled Project" : displayName;
-        ClearPreviewSurface("Nothing selected");
-        RefreshMediaList();
-        RefreshTasksPanel();
-        UpdateInspector(null);
-        RestartAutosave();
-        CommandManager.InvalidateRequerySuggested();
-    }
-
-    private void OpenProject_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-        if (!ConfirmCanReplaceCurrentProject()) return;
-
-        var dialog = new OpenFileDialog { Filter = "Rushframe Project (*.rushframe)|*.rushframe|Legacy Project (*/project.json)|project.json" };
-        if (dialog.ShowDialog() != true) return;
-
-        if (dialog.FileName.EndsWith("project.json"))
-        {
-            var legacyDir = Path.GetDirectoryName(dialog.FileName)!;
-            var result = _migrationService.MigrateLegacyProject(legacyDir);
-            if (result.Success && result.Project != null)
-            {
-                LoadProjectIntoEditor(result.Project, null, result.Project.Name);
-            }
-            else
-            {
-                MessageBox.Show($"Migration failed:\n{string.Join("\n", result.Errors)}", "Migration Error");
-            }
-        }
-        else
-        {
-            var loaded = _projectRepo.Load(dialog.FileName);
-            if (loaded != null)
-            {
-                LoadProjectIntoEditor(
-                    loaded,
-                    dialog.FileName,
-                    Path.GetFileNameWithoutExtension(dialog.FileName));
-            }
-        }
-    }
-
-    private void SaveProject_Executed(object sender, ExecutedRoutedEventArgs e) => SaveCurrentProject();
-
-    private async void ImportMedia_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Filter = "Media Files (*.mp4;*.mov;*.avi;*.wav;*.mp3;*.png;*.jpg;*.jpeg)|*.mp4;*.mov;*.avi;*.wav;*.mp3;*.png;*.jpg;*.jpeg",
-            Multiselect = true,
-        };
-        if (dialog.ShowDialog() != true) return;
-
-        SetMediaOperationState(true, $"Importing {dialog.FileNames.Length} media file(s)…");
-        try
-        {
-            foreach (var file in dialog.FileNames)
-            {
-                var duration = MediaTime.Zero;
-                try
-                {
-                    var probe = await _mediaService.ProbeAsync(file);
-                    duration = MediaTime.FromSeconds(probe.Duration.TotalSeconds);
-                }
-                catch
-                {
-                    // Keep import usable without FFmpeg; probing can be retried later.
-                }
-
-                _project.MediaLibrary.Add(new MediaAsset
-                {
-                    Kind = GetMediaKind(file),
-                    OriginalPath = file,
-                    RelativeProjectPath = file,
-                    Duration = duration,
-                });
-            }
-            RefreshMediaList();
-            MarkProjectDirty("Media imported");
-        }
-        finally
-        {
-            SetMediaOperationState(false, "Import complete");
-        }
-    }
-
-    private void RelinkMedia_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-        if (MediaList.SelectedItem is not MediaListItem selected) return;
-        var dialog = new OpenFileDialog { Filter = "Media Files|*.mp4;*.mov;*.avi;*.mkv;*.webm;*.wav;*.mp3;*.aac;*.m4a;*.flac;*.png;*.jpg;*.jpeg;*.webp;*.bmp|All Files|*.*" };
-        if (dialog.ShowDialog() != true) return;
-
-        var replacement = new MediaAsset
-        {
-            Id = selected.Asset.Id,
-            Kind = GetMediaKind(dialog.FileName),
-            OriginalPath = dialog.FileName,
-            RelativeProjectPath = dialog.FileName,
-            Duration = selected.Asset.Duration,
-            IsOffline = false,
-        };
-        var index = _project.MediaLibrary.FindIndex(a => a.Id == selected.Asset.Id);
-        if (index >= 0) _project.MediaLibrary[index] = replacement;
-        RefreshMediaList();
-        MarkProjectDirty("Media relinked");
-        AddRenderQueueMessage($"Relinked: {Path.GetFileName(dialog.FileName)}");
-    }
-
-    private async void GenerateMediaCache_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-        if (MediaList.SelectedItem is not MediaListItem selected) return;
-        var asset = selected.Asset;
-        if (!File.Exists(asset.OriginalPath))
-        {
-            AddRenderQueueMessage($"Cache skipped, offline: {Path.GetFileName(asset.OriginalPath)}");
-            return;
-        }
-
-        var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rushframe", "Cache");
-        Directory.CreateDirectory(appData);
-        SetMediaOperationState(true, $"Generating cache for {Path.GetFileName(asset.OriginalPath)}…");
-        try
-        {
-            if (asset.Kind is MediaKind.Video or MediaKind.Image)
-                await _mediaService.GenerateThumbnailAsync(new(asset.OriginalPath, Path.Combine(appData, "thumbnails", $"{asset.Id}.jpg"), TimeSpan.FromSeconds(1)));
-            if (asset.Kind is MediaKind.Video)
-                await _mediaService.GenerateProxyAsync(new(asset.OriginalPath, Path.Combine(appData, "proxy", $"{asset.Id}.mp4"), 540));
-            if (asset.Kind is MediaKind.Video or MediaKind.Audio)
-                await _mediaService.GenerateWaveformAsync(new(asset.OriginalPath, Path.Combine(appData, "waveforms", $"{asset.Id}.png")));
-
-            AddRenderQueueMessage($"Cache generated: {Path.GetFileName(asset.OriginalPath)}");
-            RefreshMediaList();
-        }
-        catch (Exception ex)
-        {
-            AddRenderQueueMessage($"Cache failed: {ex.Message}");
-        }
-        finally
-        {
-            SetMediaOperationState(false, "Cache operation finished");
-        }
-    }
-
-    private async Task RunMediaIntelligenceAsync()
-    {
-        if (MediaList.SelectedItem is not MediaListItem selected)
-        {
-            AddMediaIntelligenceMessage("Select a media file first.");
-            return;
-        }
-
-        var asset = selected.Asset;
-        if (!File.Exists(asset.OriginalPath))
-        {
-            AddMediaIntelligenceMessage($"Analysis skipped, offline: {Path.GetFileName(asset.OriginalPath)}");
-            return;
-        }
-
-        var outputDir = GetMediaAnalysisOutputDirectory(asset);
-        Directory.CreateDirectory(outputDir);
-
-        if (_isMediaOperationRunning) return;
-        SetMediaOperationState(true, $"Analyzing {Path.GetFileName(asset.OriginalPath)}…");
-        RunMediaIntelligenceButton.IsEnabled = false;
-        MediaIntelligenceTab.IsSelected = true;
-        AddMediaIntelligenceMessage($"Analyzing: {Path.GetFileName(asset.OriginalPath)}");
-        AddMediaIntelligenceMessage($"Output: {outputDir}");
-
-        try
-        {
-            var repoRoot = FindRepoRoot();
-            var ffmpegPath = ResolveFfmpegPath(repoRoot);
-            var model = GetSelectedWhisperModel();
-            var args = new List<string>
-            {
-                "-m", "rushframe_intelligence", "analyze",
-                asset.OriginalPath,
-                outputDir,
-                "--ffmpeg", ffmpegPath,
-                "--whisper-model", model,
-                "--max-input-seconds", Math.Clamp(_settings.MaxAiInputSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture),
-            };
-            if (AnalyzeScenesToggle.IsChecked != true) args.Add("--no-scenes");
-            if (AnalyzeTranscriptToggle.IsChecked != true) args.Add("--no-transcript");
-            if (AnalyzeMusicToggle.IsChecked != true) args.Add("--no-audio");
-            if (AnalyzeGeminiToggle.IsChecked == true)
-            {
-                args.Add("--visual-provider");
-                args.Add(GetSelectedVisualProvider());
-            }
-            if (AnalyzeOcrToggle.IsChecked == true) args.Add("--ocr");
-            if (AnalyzeAlignmentToggle.IsChecked == true) args.Add("--alignment");
-            if (AnalyzeDiarizationToggle.IsChecked == true) args.Add("--diarization");
-            if (AnalyzeAudioEventsToggle.IsChecked == true) args.Add("--audio-events");
-            if (BuildEmbeddingsToggle.IsChecked == true) args.Add("--embeddings");
-
-            var result = await RunPythonAsync(args, repoRoot);
-            if (!string.IsNullOrWhiteSpace(result.StandardOutput))
-                AddMediaIntelligenceMessage(result.StandardOutput.Trim());
-            if (!string.IsNullOrWhiteSpace(result.StandardError))
-                AddMediaIntelligenceMessage(result.StandardError.Trim());
-
-            if (result.ExitCode != 0)
-            {
-                AddMediaIntelligenceMessage($"Analysis failed with exit code {result.ExitCode}.");
-                return;
-            }
-
-            var analysisPath = Path.Combine(outputDir, "media-analysis.json");
-            SummarizeMediaAnalysis(analysisPath);
-            await ApplyMediaIntelligenceToTimelineAsync(analysisPath, asset, autoApply: true);
-            AddRenderQueueMessage($"Media intelligence complete: {Path.GetFileName(asset.OriginalPath)}");
-        }
-        catch (Exception ex)
-        {
-            AddMediaIntelligenceMessage($"Analysis failed: {ex.Message}");
-        }
-        finally
-        {
-            RunMediaIntelligenceButton.IsEnabled = true;
-            SetMediaOperationState(false, "Media analysis finished");
-        }
-    }
-
-    private async Task ApplyCurrentMediaIntelligenceToTimelineAsync()
-    {
-        var asset = ResolveMediaIntelligenceAsset();
-        if (asset == null)
-        {
-            AddMediaIntelligenceMessage("Select a media item or a timeline clip first.");
-            return;
-        }
-
-        var analysisPath = Path.Combine(GetMediaAnalysisOutputDirectory(asset), "media-analysis.json");
-        await ApplyMediaIntelligenceToTimelineAsync(analysisPath, asset, autoApply: false);
-    }
-
-    private async void ImportMediaIntelligence_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-        OpenUtilityPanel(PanelId.MediaIntelligence, MediaIntelligenceTab);
-        var asset = ResolveMediaIntelligenceAsset();
-        if (asset == null)
-        {
-            MessageBox.Show(this, "Select a media item or timeline clip first.", "Media Intelligence", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var dialog = new OpenFileDialog
-        {
-            Title = "Import Media Intelligence Analysis",
-            Filter = "Media analysis JSON|media-analysis.json;*.json|JSON files|*.json|All files|*.*",
-        };
-        if (dialog.ShowDialog(this) != true) return;
-
-        await ApplyMediaIntelligenceToTimelineAsync(dialog.FileName, asset, autoApply: false);
-    }
-
-    private async Task ApplyMediaIntelligenceToTimelineAsync(string analysisPath, MediaAsset asset, bool autoApply)
-    {
-        if (!File.Exists(analysisPath))
-        {
-            if (!autoApply)
-                AddMediaIntelligenceMessage("Run analysis first or choose an existing media-analysis.json file.");
-            return;
-        }
-
-        var target = ResolveMediaIntelligenceTarget(asset.Id);
-        if (target == null)
-        {
-            AddMediaIntelligenceMessage($"Analysis saved, but '{Path.GetFileName(asset.OriginalPath)}' is not on the timeline yet.");
-            return;
-        }
-
-        try
-        {
-            var analysis = await _mediaIntelligenceImportService.ImportAsync(analysisPath, asset);
-            MediaIntelligenceImportService.StoreInProject(_project, analysis);
-            var command = new ApplyMediaIntelligenceCommand
-            {
-                TargetItemId = target.Id,
-                Analysis = analysis,
-                AddSceneMarkers = true,
-                AddCaptionClips = true,
-            };
-            Execute(command);
-
-            if (!string.IsNullOrWhiteSpace(_currentProjectPath))
-                _projectRepo.Save(_project, _currentProjectPath);
-            else
-                _autosave.Save(_project);
-
-            var message = $"Timeline updated: {command.CreatedMarkerCount} scene markers and {command.CreatedCaptionCount} caption clips.";
-            AddMediaIntelligenceMessage(message);
-            StatusText.Text = message;
-            _timeline?.ScrollToTime(target.TimelineStart);
-        }
-        catch (Exception ex)
-        {
-            AddMediaIntelligenceMessage($"Could not apply analysis: {ex.Message}");
-        }
-    }
-
-    private MediaAsset? ResolveMediaIntelligenceAsset()
-    {
-        if (_timeline?.SelectedItem?.MediaAssetId is MediaAssetId timelineAssetId)
-            return _project.MediaLibrary.FirstOrDefault(asset => asset.Id == timelineAssetId);
-        return (MediaList.SelectedItem as MediaListItem)?.Asset;
-    }
-
-    private TimelineItem? ResolveMediaIntelligenceTarget(MediaAssetId assetId)
-    {
-        if (_timeline?.SelectedItem is { } selected && selected.MediaAssetId == assetId)
-            return selected;
-
-        return _project.MainSequence?.Tracks
-            .SelectMany(track => track.Items)
-            .FirstOrDefault(item => item.MediaAssetId == assetId);
-    }
-
-    private void OpenSelectedMediaAnalysisOutput()
-    {
-        if (MediaList.SelectedItem is not MediaListItem selected)
-        {
-            AddMediaIntelligenceMessage("Select a media file first.");
-            return;
-        }
-
-        var outputDir = GetMediaAnalysisOutputDirectory(selected.Asset);
-        Directory.CreateDirectory(outputDir);
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = outputDir,
-            UseShellExecute = true,
-        });
-    }
-
-    private void SearchMediaContext(bool findHooks)
-    {
-        var asset = ResolveMediaIntelligenceAsset();
-        if (asset == null)
-        {
-            AddMediaIntelligenceMessage("Select analyzed media or a timeline clip first.");
-            return;
-        }
-
-        var analysis = _project.MediaIntelligence.FirstOrDefault(candidate => candidate.MediaAssetId == asset.Id);
-        if (analysis == null || analysis.Moments.Count == 0)
-        {
-            AddMediaIntelligenceMessage("No searchable editing moments are loaded. Run and apply media intelligence first.");
-            return;
-        }
-
-        IReadOnlyList<MediaMomentSearchResult> results = findHooks
-            ? _mediaIntelligenceSearchService.FindHooks(analysis, limit: 8)
-            : _mediaIntelligenceSearchService.Search(
-                analysis,
-                new MediaMomentSearchQuery(MediaContextSearchBox.Text, Limit: 12));
-
-        MediaIntelligenceList.Items.Clear();
-        MediaIntelligenceEmptyText.Visibility = results.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        MediaIntelligenceEmptyText.Text = results.Count == 0 ? "No matching moments" : "Select media, then run analysis";
-        foreach (var result in results)
-        {
-            var roles = result.Roles.Count > 0 ? string.Join(", ", result.Roles) : "context";
-            MediaIntelligenceList.Items.Add(
-                $"{FormatPreviewTime(TimeSpan.FromSeconds(result.Start.Seconds))}–{FormatPreviewTime(TimeSpan.FromSeconds(result.End.Seconds))}  [{roles}]  {result.Summary}");
-        }
-    }
-
-    private void AddMediaIntelligenceMessage(string message)
-    {
-        MediaIntelligenceList.Items.Add(message);
-        MediaIntelligenceEmptyText.Visibility = Visibility.Collapsed;
-        MediaIntelligenceList.ScrollIntoView(message);
-    }
-
-    private string GetMediaAnalysisOutputDirectory(MediaAsset asset) =>
-        Path.Combine(_appData, "analysis", "media-intelligence", asset.Id.ToString());
-
-    private static async Task<ProcessResult> RunProcessAsync(string fileName, string arguments, string workingDirectory)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"{fileName} did not start.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        return new ProcessResult(process.ExitCode, await stdoutTask, await stderrTask);
-    }
-
-    private async Task<ProcessResult> RunPythonAsync(IReadOnlyList<string> args, string workingDirectory)
-    {
-        var managedPython = Path.Combine(workingDirectory, ".tools", "intelligence-venv", "Scripts", "python.exe");
-        foreach (var launcher in new[] { managedPython, "py", "python" })
-        {
-            if (Path.IsPathFullyQualified(launcher) && !File.Exists(launcher)) continue;
-            var psi = new ProcessStartInfo
-            {
-                FileName = launcher,
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            if (launcher == "py") psi.ArgumentList.Add("-3");
-            foreach (var arg in args) psi.ArgumentList.Add(arg);
-            var geminiApiKey = SecretProtectionService.Unprotect(_settings.ProtectedGeminiApiKey);
-            if (!string.IsNullOrWhiteSpace(geminiApiKey))
-                psi.Environment["GEMINI_API_KEY"] = geminiApiKey;
-
-            try
-            {
-                using var process = Process.Start(psi) ?? throw new InvalidOperationException("Python did not start.");
-                var stdoutTask = process.StandardOutput.ReadToEndAsync();
-                var stderrTask = process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
-                return new ProcessResult(process.ExitCode, await stdoutTask, await stderrTask);
-            }
-            catch (Win32Exception)
-            {
-                continue;
-            }
-        }
-
-        throw new InvalidOperationException("Python was not found. Install Python or add it to PATH.");
-    }
-
-    private void SummarizeMediaAnalysis(string jsonPath)
-    {
-        if (!File.Exists(jsonPath))
-        {
-            AddMediaIntelligenceMessage("Analysis finished, but media-analysis.json was not created.");
-            return;
-        }
-
-        using var document = JsonDocument.Parse(File.ReadAllText(jsonPath));
-        var root = document.RootElement;
-        var scenes = CountArray(root, "scenes");
-        var transcript = CountArray(root, "transcript");
-        var moments = CountArray(root, "moments");
-        var duplicateTakes = CountArray(root, "duplicate_take_groups");
-        var warnings = CountArray(root, "warnings");
-        AddMediaIntelligenceMessage($"Complete: {scenes} scenes, {transcript} transcript segments, {moments} editing moments, {duplicateTakes} repeated-take groups, {warnings} warnings.");
-        AddMediaIntelligenceMessage(jsonPath);
-    }
-
-    private string GetSelectedWhisperModel() =>
-        WhisperModelCombo.SelectedItem is ComboBoxItem item && item.Content is string value
-            ? value
-            : "base";
-
-    private string GetSelectedVisualProvider() =>
-        VisualProviderCombo.SelectedItem is ComboBoxItem item && item.Tag is string value
-            ? value
-            : "gemini";
-
-    private static int CountArray(JsonElement root, string propertyName) =>
-        root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.Array
-            ? value.GetArrayLength()
-            : 0;
-
-    private static string ResolveFfmpegPath(string repoRoot)
-    {
-        var local = Path.Combine(repoRoot, ".tools", "bin", "ffmpeg.exe");
-        return File.Exists(local) ? local : "ffmpeg";
-    }
-
-    private static string FindRepoRoot()
-    {
-        foreach (var start in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
-        {
-            var directory = new DirectoryInfo(start);
-            while (directory != null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "rushframe_intelligence", "pipeline.py")))
-                    return directory.FullName;
-                directory = directory.Parent;
-            }
-        }
-
-        return Environment.CurrentDirectory;
-    }
-
-    private async void ExtractAudio_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-        if (_selectedInspectorItem?.MediaAssetId == null) return;
-        var source = _project.MediaLibrary.FirstOrDefault(a => a.Id == _selectedInspectorItem.MediaAssetId.Value);
-        if (source == null || !File.Exists(source.OriginalPath)) return;
-
-        var output = Path.Combine(Path.GetDirectoryName(source.OriginalPath)!, $"{Path.GetFileNameWithoutExtension(source.OriginalPath)}_audio.wav");
-        SetMediaOperationState(true, $"Extracting audio from {Path.GetFileName(source.OriginalPath)}…");
-        try
-        {
-            await _mediaService.ExtractAudioAsync(source.OriginalPath, output);
-            var asset = new MediaAsset
-            {
-                Kind = MediaKind.Audio,
-                OriginalPath = output,
-                RelativeProjectPath = output,
-                Duration = source.Duration,
-            };
-            _project.MediaLibrary.Add(asset);
-            RefreshMediaList();
-            AddRenderQueueMessage($"Extracted audio: {Path.GetFileName(output)}");
-        }
-        catch (Exception ex)
-        {
-            AddRenderQueueMessage($"Extract audio failed: {ex.Message}");
-        }
-        finally
-        {
-            SetMediaOperationState(false, "Audio extraction finished");
-        }
     }
 
     private void AddText_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -3075,37 +3788,41 @@ public partial class MainWindow : Window
     private void AddMarker_Executed(object sender, ExecutedRoutedEventArgs e)
     {
         if (_project.MainSequence == null || _timeline == null) return;
-        Execute(new AddMarkerCommand
+        var marker = new Marker
         {
-            Marker = new Marker
-            {
-                Label = $"Marker {_project.MainSequence.Markers.Count + 1}",
-                Time = _timeline.PlayheadTime,
-                Color = "#ffcc00",
-            },
+            Label = $"Marker {_project.MainSequence.Markers.Count + 1}",
+            Time = _timeline.PlayheadTime,
+            Color = "#ffcc00",
+        };
+        var result = new Dialogs.MarkerEditorDialog(this, marker, isNew: true).Show();
+        if (result == null) return;
+        marker.Label = result.Label;
+        marker.Note = result.Note;
+        marker.Time = result.Time;
+        marker.Duration = result.Duration;
+        marker.Color = result.Color;
+        Execute(new AddMarkerCommand { Marker = marker });
+    }
+
+    private void EditMarker(Marker marker)
+    {
+        var result = new Dialogs.MarkerEditorDialog(this, marker, isNew: false).Show();
+        if (result == null) return;
+        Execute(new EditMarkerCommand
+        {
+            MarkerId = marker.Id,
+            NewLabel = result.Label,
+            NewNote = result.Note,
+            NewTime = result.Time,
+            NewDuration = result.Duration,
+            NewColor = result.Color,
         });
     }
 
     private async void Render_Executed(object sender, ExecutedRoutedEventArgs e)
     {
-        var seq = _project.MainSequence;
-        if (seq == null) return;
-
-        const double hardOutputLimitSeconds = 180;
-        if (seq.Duration.Seconds > hardOutputLimitSeconds + 0.001)
-        {
-            MessageBox.Show(
-                this,
-                $"The timeline is {FormatPreviewTime(TimeSpan.FromSeconds(seq.Duration.Seconds))}. Rushframe output is limited to 03:00. Trim or remove content after 3 minutes before exporting.",
-                "Output Too Long",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            StatusText.Text = "Export blocked: timeline exceeds the 3-minute limit";
-            return;
-        }
-
-        var dialog = new SaveFileDialog { Filter = "MP4 Video (*.mp4)|*.mp4", FileName = $"{_project.Name}.mp4" };
-        if (dialog.ShowDialog() != true) return;
+        var sequence = _project.MainSequence;
+        if (sequence == null) return;
 
         _operationCancellation?.Dispose();
         _operationCancellation = new CancellationTokenSource();
@@ -3126,34 +3843,24 @@ public partial class MainWindow : Window
         SetMediaOperationState(true, "Rendering timeline…");
         OperationProgressBar.Visibility = Visibility.Visible;
         CancelOperationButton.Visibility = Visibility.Visible;
-        AddRenderQueueMessage($"Export started: {Path.GetFileName(dialog.FileName)}");
         try
         {
-            await _mediaService.ExportTimelineAsync(
+            await _exportController.ExportAsync(
                 _project,
-                seq,
-                dialog.FileName,
+                sequence,
+                _operationCancellation.Token,
                 progress,
-                _operationCancellation.Token);
-            AddRenderQueueMessage($"Export complete: {Path.GetFileName(dialog.FileName)}");
-            var answer = MessageBox.Show(
-                this,
-                $"Export complete:\n{dialog.FileName}\n\nOpen the containing folder?",
-                "Export Complete",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information);
-            if (answer == MessageBoxResult.Yes)
-                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{dialog.FileName}\"") { UseShellExecute = true });
+                AddRenderQueueMessage,
+                message => StatusText.Text = message,
+                MarkProjectDirty);
         }
         catch (OperationCanceledException)
         {
-            AddRenderQueueMessage($"Export canceled: {Path.GetFileName(dialog.FileName)}");
-            StatusText.Text = "Export canceled";
+            // The controller already reports cancellation to the activity log and status bar.
         }
-        catch (Exception ex)
+        catch
         {
-            AddRenderQueueMessage($"Export failed: {ex.Message}");
-            MessageBox.Show($"Render failed:\n{ex.Message}", "Render Error");
+            // The controller already reports the render failure to the user.
         }
         finally
         {
@@ -3168,26 +3875,44 @@ public partial class MainWindow : Window
 
     private void Undo_Executed(object sender, ExecutedRoutedEventArgs e)
     {
+        if (!TryResolvePendingInspectorChanges()) return;
         var sequence = _project.MainSequence;
         if (sequence == null) return;
+        using var mutation = _saveCoordinator.BeginMutation();
         var result = _undoRedo.Undo(sequence);
         if (!result.Success) return;
+        _project.IncrementRevision();
         RefreshSelectionAfterEdit(sequence);
-        _timeline?.InvalidateVisual();
-        UpdateInspector(_selectedInspectorItem);
+        if (_timeline != null) _timeline.ProjectRevision = _project.Revision;
+        if (_selectedTransitionSelection != null)
+            RefreshTransitionInspectorAfterEdit(sequence);
+        else
+            UpdateInspector(_selectedInspectorItem);
+        UpdatePreviewOrientationButton();
+        RefreshPreviewGuidesOverlay();
+        UpdatePreviewInteractionOverlay(_selectedInspectorItem);
         MarkProjectDirty("Undo applied");
         CommandManager.InvalidateRequerySuggested();
     }
 
     private void Redo_Executed(object sender, ExecutedRoutedEventArgs e)
     {
+        if (!TryResolvePendingInspectorChanges()) return;
         var sequence = _project.MainSequence;
         if (sequence == null) return;
+        using var mutation = _saveCoordinator.BeginMutation();
         var result = _undoRedo.Redo(sequence);
         if (!result.Success) return;
+        _project.IncrementRevision();
         RefreshSelectionAfterEdit(sequence);
-        _timeline?.InvalidateVisual();
-        UpdateInspector(_selectedInspectorItem);
+        if (_timeline != null) _timeline.ProjectRevision = _project.Revision;
+        if (_selectedTransitionSelection != null)
+            RefreshTransitionInspectorAfterEdit(sequence);
+        else
+            UpdateInspector(_selectedInspectorItem);
+        UpdatePreviewOrientationButton();
+        RefreshPreviewGuidesOverlay();
+        UpdatePreviewInteractionOverlay(_selectedInspectorItem);
         MarkProjectDirty("Redo applied");
         CommandManager.InvalidateRequerySuggested();
     }
@@ -3218,8 +3943,36 @@ public partial class MainWindow : Window
     private void Paste_Executed(object sender, ExecutedRoutedEventArgs e)
     {
         var seq = _project.MainSequence;
-        if (seq == null || _timeline == null || _clipboard?.Clipboard == null) return;
+        if (seq == null || _timeline == null) return;
 
+        if (_groupClipboard is { Count: > 0 })
+        {
+            var groupPasteStart = _timeline.PlayheadTime;
+            var commands = new List<IEditCommand>();
+            foreach (var clipboardItem in _groupClipboard)
+            {
+                var groupTargetTrack = clipboardItem.TrackIndex >= 0 && clipboardItem.TrackIndex < seq.Tracks.Count
+                    && !seq.Tracks[clipboardItem.TrackIndex].Locked
+                    && TrackCompatibility.IsItemCompatibleWithTrack(clipboardItem.Item.Kind, seq.Tracks[clipboardItem.TrackIndex].Kind)
+                        ? seq.Tracks[clipboardItem.TrackIndex]
+                        : seq.Tracks.FirstOrDefault(track =>
+                            !track.Locked && TrackCompatibility.IsItemCompatibleWithTrack(clipboardItem.Item.Kind, track.Kind));
+                if (groupTargetTrack == null) continue;
+
+                commands.Add(new AddClipCommand
+                {
+                    TrackId = groupTargetTrack.Id,
+                    Item = TimelineItemCloner.Clone(
+                        clipboardItem.Item,
+                        groupPasteStart.Add(clipboardItem.RelativeStart)),
+                });
+            }
+            if (commands.Count > 0)
+                Execute(new CompositeEditCommand($"Paste {commands.Count} clips", commands));
+            return;
+        }
+
+        if (_clipboard?.Clipboard == null) return;
         var preferredIndex = _timeline.SelectedTrackIndex >= 0
             ? _timeline.SelectedTrackIndex
             : _lastSelectedTrackIndex;
@@ -3228,10 +3981,30 @@ public partial class MainWindow : Window
             : seq.Tracks.FirstOrDefault(track => !track.Locked);
         if (targetTrack == null) return;
 
+        var pasteStart = _timeline.PlayheadTime;
+        var pasteEnd = pasteStart.Add(_clipboard.Clipboard.Duration);
+        var overlapping = targetTrack.Items
+            .Where(item => item.TimelineStart < pasteEnd && item.TimelineStart.Add(item.Duration) > pasteStart)
+            .ToList();
+        if (overlapping.Count > 0)
+        {
+            var answer = MessageBox.Show(
+                this,
+                $"Pasting here will overlap {overlapping.Count} item(s) on {targetTrack.Name}. Continue?",
+                "Confirm Paste Overlap",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes)
+            {
+                StatusText.Text = "Paste canceled";
+                return;
+            }
+        }
+
         Execute(new PasteClipCommand
         {
             TrackId = targetTrack.Id,
-            TimelineStart = _timeline.PlayheadTime,
+            TimelineStart = pasteStart,
             CopyCommand = _clipboard,
         });
     }
@@ -3259,9 +4032,17 @@ public partial class MainWindow : Window
 
     private void DeleteSelectedClip()
     {
-        var item = _timeline?.SelectedItem;
-        if (item == null) return;
-        Execute(new Domain.Editing.DeleteClipCommand { ItemId = item.Id });
+        var selectedItems = _timeline?.SelectedItems ?? [];
+        if (selectedItems.Count == 0) return;
+        if (selectedItems.Count == 1)
+        {
+            Execute(new Domain.Editing.DeleteClipCommand { ItemId = selectedItems[0].Id });
+            return;
+        }
+
+        Execute(new CompositeEditCommand(
+            $"Delete {selectedItems.Count} clips",
+            selectedItems.Select(item => (IEditCommand)new Domain.Editing.DeleteClipCommand { ItemId = item.Id })));
     }
 
     private void RippleDelete_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -3273,66 +4054,44 @@ public partial class MainWindow : Window
 
     private void Duplicate_Executed(object sender, ExecutedRoutedEventArgs e)
     {
-        var item = _timeline?.SelectedItem;
-        if (item == null) return;
-        Execute(new DuplicateClipCommand { ItemId = item.Id });
+        var selectedItems = _timeline?.SelectedItems ?? [];
+        if (selectedItems.Count == 0) return;
+        Execute(new CompositeEditCommand(
+            selectedItems.Count == 1 ? "Duplicate clip" : $"Duplicate {selectedItems.Count} clips",
+            selectedItems.Select(item => (IEditCommand)new DuplicateClipCommand { ItemId = item.Id })));
     }
 
     private bool CopySelectedClip()
     {
-        var item = _timeline?.SelectedItem;
+        var selectedItems = _timeline?.SelectedItems ?? [];
         var seq = _project.MainSequence;
-        if (item == null || seq == null) return false;
+        if (selectedItems.Count == 0 || seq == null) return false;
 
+        if (selectedItems.Count > 1)
+        {
+            var earliest = selectedItems.Min(item => item.TimelineStart.Seconds);
+            _groupClipboard = selectedItems.Select(item =>
+            {
+                var trackIndex = seq.Tracks.FindIndex(track => track.Items.Any(candidate => candidate.Id == item.Id));
+                return new GroupClipboardItem(
+                    TimelineItemCloner.Clone(item, item.TimelineStart),
+                    trackIndex,
+                    MediaTime.FromSeconds(item.TimelineStart.Seconds - earliest));
+            }).ToList();
+            _clipboard = null;
+            CommandManager.InvalidateRequerySuggested();
+            StatusText.Text = $"Copied {selectedItems.Count} clips";
+            return true;
+        }
+
+        var item = selectedItems[0];
         var copy = new CopyClipCommand { ItemId = item.Id };
         var result = copy.Execute(seq);
         if (!result.Success) return false;
         _clipboard = copy;
+        _groupClipboard = null;
         CommandManager.InvalidateRequerySuggested();
         return true;
-    }
-
-    private void RefreshTasksPanel()
-    {
-        _suppressTaskTracking = true;
-        try
-        {
-            CampaignDescriptionBox.Text = _project.CampaignDescription;
-            TaskList.ItemsSource = null;
-            TaskList.ItemsSource = _project.Tasks;
-            TasksEmptyText.Visibility = _project.Tasks.Count == 0
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        }
-        finally
-        {
-            _suppressTaskTracking = false;
-        }
-    }
-
-    private void AddCampaignTask()
-    {
-        var title = NewTaskBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            NewTaskBox.Focus();
-            return;
-        }
-
-        _project.Tasks.Add(new CampaignTask { Title = title });
-        NewTaskBox.Clear();
-        RefreshTasksPanel();
-        MarkProjectDirty("Campaign task added");
-    }
-
-    private void DeleteCampaignTask_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: Guid taskId }) return;
-        var task = _project.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
-        if (task == null) return;
-        _project.Tasks.Remove(task);
-        RefreshTasksPanel();
-        MarkProjectDirty("Campaign task deleted");
     }
 
     private void AddRenderQueueMessage(string message)
@@ -3345,52 +4104,127 @@ public partial class MainWindow : Window
     {
         _isMediaOperationRunning = running;
         if (!string.IsNullOrWhiteSpace(status)) StatusText.Text = status;
+        UpdateMediaIntelligenceActionState();
         CommandManager.InvalidateRequerySuggested();
     }
 
     private void RefreshMediaList()
     {
         var selectedAssetId = (MediaList.SelectedItem as MediaListItem)?.Asset.Id;
-        var assets = _project.MediaLibrary.AsEnumerable();
+        RebuildMediaIndexes();
 
-        if (_mediaKindFilter.HasValue)
-            assets = assets.Where(asset => asset.Kind == _mediaKindFilter.Value);
-
-        if (!string.IsNullOrWhiteSpace(_mediaSearchText))
+        var activeIds = _project.MediaLibrary.Select(asset => asset.Id).ToHashSet();
+        for (var index = _mediaItems.Count - 1; index >= 0; index--)
         {
-            assets = assets.Where(asset =>
-                Path.GetFileName(asset.OriginalPath).Contains(
-                    _mediaSearchText,
-                    StringComparison.OrdinalIgnoreCase));
+            var item = _mediaItems[index];
+            if (activeIds.Contains(item.Asset.Id)) continue;
+            _mediaItems.RemoveAt(index);
+            _mediaItemsById.Remove(item.Asset.Id);
         }
 
-        var visibleAssets = assets.ToList();
-        MediaList.Items.Clear();
-        foreach (var asset in visibleAssets)
-            MediaList.Items.Add(CreateMediaListItem(asset));
-
-        if (selectedAssetId.HasValue)
+        foreach (var asset in _project.MediaLibrary)
         {
-            MediaList.SelectedItem = MediaList.Items
-                .OfType<MediaListItem>()
-                .FirstOrDefault(item => item.Asset.Id == selectedAssetId.Value);
+            var thumbnailPath = GetMediaThumbnailPath(asset);
+            var fallbackGlyph = GetMediaFallbackGlyph(asset.Kind);
+            var durationText = FormatDuration(asset.Duration);
+            if (_mediaItemsById.TryGetValue(asset.Id, out var existing))
+            {
+                existing.Update(asset, thumbnailPath, fallbackGlyph, durationText);
+                continue;
+            }
+
+            var item = new MediaListItem(asset, thumbnailPath, fallbackGlyph, durationText);
+            _mediaItemsById[asset.Id] = item;
+            _mediaItems.Add(item);
         }
 
-        MediaCountText.Text = $"{visibleAssets.Count} item{(visibleAssets.Count == 1 ? string.Empty : "s")}";
-        MediaEmptyState.Visibility = Vis(visibleAssets.Count == 0);
+        RefreshProjectFolderFilters();
+        RefreshMediaView();
+        if (selectedAssetId.HasValue
+            && _mediaItemsById.TryGetValue(selectedAssetId.Value, out var selected)
+            && ShouldShowMediaItem(selected))
+            MediaList.SelectedItem = selected;
+
+        Dispatcher.BeginInvoke(QueueVisibleMediaThumbnails, DispatcherPriority.ContextIdle);
+    }
+
+    private bool ShouldShowMediaItem(object value)
+    {
+        if (value is not MediaListItem item) return false;
+        if (_mediaKindFilter.HasValue && item.Asset.Kind != _mediaKindFilter.Value) return false;
+        if (!string.IsNullOrWhiteSpace(_mediaFolderFilter)
+            && !string.Equals(item.FolderPath, _mediaFolderFilter, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return string.IsNullOrWhiteSpace(_mediaSearchText)
+               || item.FileName.Contains(_mediaSearchText, StringComparison.OrdinalIgnoreCase)
+               || item.FolderPath.Contains(_mediaSearchText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RefreshMediaView()
+    {
+        _mediaItemsView?.Refresh();
+        var visibleCount = _mediaItemsView?.Cast<object>().Count() ?? _mediaItems.Count;
+        MediaCountText.Text = $"{visibleCount} file{(visibleCount == 1 ? string.Empty : "s")}";
+        MediaEmptyState.Visibility = Vis(visibleCount == 0);
         AddToTimelineButton.IsEnabled = MediaList.SelectedItem != null;
         PreviewSelectedMediaButton.IsEnabled = MediaList.SelectedItem != null;
-        StatusText.Text = visibleAssets.Count == 0
+        StatusText.Text = visibleCount == 0
             ? "Ready"
-            : $"{visibleAssets.Count} media item{(visibleAssets.Count == 1 ? string.Empty : "s")} available";
+            : $"{visibleCount} project file{(visibleCount == 1 ? string.Empty : "s")} available";
         CommandManager.InvalidateRequerySuggested();
+        Dispatcher.BeginInvoke(QueueVisibleMediaThumbnails, DispatcherPriority.ContextIdle);
+    }
+
+    private void QueueVisibleMediaThumbnails()
+    {
+        _thumbnailLoadCancellation?.Cancel();
+        _thumbnailLoadCancellation?.Dispose();
+        _thumbnailLoadCancellation = new CancellationTokenSource();
+        var cancellationToken = _thumbnailLoadCancellation.Token;
+        var queued = 0;
+
+        foreach (var item in _mediaItems)
+        {
+            if (!ShouldShowMediaItem(item)) continue;
+            var container = MediaList.ItemContainerGenerator.ContainerFromItem(item) as ListBoxItem;
+            if (container?.IsVisible != true && queued >= 48) continue;
+            if (!item.TryBeginThumbnailLoad()) continue;
+            _ = LoadMediaThumbnailAsync(item, cancellationToken);
+            queued++;
+            if (queued >= 128) break;
+        }
+    }
+
+    private async Task LoadMediaThumbnailAsync(MediaListItem item, CancellationToken cancellationToken)
+    {
+        var path = item.ThumbnailPath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            item.CompleteThumbnailLoad(path, null);
+            return;
+        }
+
+        var thumbnail = await _thumbnailCache.GetAsync(path, 240, cancellationToken);
+        if (!cancellationToken.IsCancellationRequested)
+            item.CompleteThumbnailLoad(path, thumbnail);
+    }
+
+    private void RebuildMediaIndexes()
+    {
+        _mediaById.Clear();
+        _mediaAssetNames.Clear();
+        foreach (var asset in _project.MediaLibrary)
+        {
+            _mediaById[asset.Id] = asset;
+            _mediaAssetNames[asset.Id] = Path.GetFileName(asset.OriginalPath);
+        }
     }
 
     private void SetMediaFilter(MediaKind? kind)
     {
         _mediaKindFilter = kind;
         UpdateMediaFilterButtons();
-        RefreshMediaList();
+        RefreshMediaView();
     }
 
     private void UpdateMediaFilterButtons()
@@ -3399,10 +4233,6 @@ public partial class MainWindow : Window
         SetFilterButtonState(VideoFilterButton, _mediaKindFilter == MediaKind.Video);
         SetFilterButtonState(ImageFilterButton, _mediaKindFilter == MediaKind.Image);
         SetFilterButtonState(AudioFilterButton, _mediaKindFilter == MediaKind.Audio);
-
-        var mediaOpen = _layout.IsPanelOpen(PanelId.Media);
-        SideMediaButton.Style = (Style)FindResource(
-            mediaOpen && (_mediaKindFilter is null or MediaKind.Video) ? "ActiveRailButtonStyle" : "RailButtonStyle");
     }
 
     private void SetFilterButtonState(Button button, bool active)
@@ -3422,13 +4252,69 @@ public partial class MainWindow : Window
     {
         var seq = _project.MainSequence;
         if (seq == null || args.TargetTrackIndex < 0 || args.TargetTrackIndex >= seq.Tracks.Count) return;
+        if (!double.IsFinite(args.NewStart.Seconds) || args.NewStart.Seconds < 0)
+        {
+            StatusText.Text = "Clip move canceled because the target time was invalid.";
+            _timeline?.InvalidateVisual();
+            return;
+        }
 
-        Execute(new MoveClipCommand
+        try
+        {
+            Execute(new MoveClipCommand
+            {
+                ItemId = args.Item.Id,
+                TargetTrackId = seq.Tracks[args.TargetTrackIndex].Id,
+                NewTimelineStart = args.NewStart,
+                Ripple = _rippleState,
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Clip move failed: {ex.Message}";
+            _timeline?.InvalidateVisual();
+        }
+    }
+
+    private void MoveClipGroup(GroupMoveRequestedEventArgs args)
+    {
+        var sequence = _project.MainSequence;
+        if (sequence == null || args.Changes.Count == 0) return;
+        var commands = args.Changes.Select(change => (IEditCommand)new MoveClipCommand
+        {
+            ItemId = change.Item.Id,
+            TargetTrackId = sequence.Tracks[change.TrackIndex].Id,
+            NewTimelineStart = change.NewStart,
+            Ripple = new RippleState(),
+        });
+        Execute(new CompositeEditCommand($"Move {args.Changes.Count} clips", commands));
+    }
+
+    private void TrimClipGroup(GroupTrimRequestedEventArgs args)
+    {
+        var sequence = _project.MainSequence;
+        if (sequence == null || args.Changes.Count == 0) return;
+        var commands = args.Changes.Select(change => (IEditCommand)new TrimClipCommand
+        {
+            TrackId = sequence.Tracks[change.TrackIndex].Id,
+            ItemId = change.Item.Id,
+            NewStart = change.NewStart,
+            NewDuration = change.NewDuration,
+            NewSourceStart = change.NewSourceStart,
+            Ripple = new RippleState(),
+        });
+        Execute(new CompositeEditCommand($"Resize {args.Changes.Count} clips", commands));
+    }
+
+    private void SetClipVolume(ClipVolumeRequestedEventArgs args)
+    {
+        Execute(new SetPropertyCommand
         {
             ItemId = args.Item.Id,
-            TargetTrackId = seq.Tracks[args.TargetTrackIndex].Id,
-            NewTimelineStart = args.NewStart,
-            Ripple = _rippleState,
+            PropertyName = nameof(TimelineItem.Volume),
+            NewValue = Math.Clamp(args.NewVolume, 0, 2),
+            Getter = item => item.Volume,
+            Setter = (item, value) => item.Volume = value is double volume ? volume : 1,
         });
     }
 
@@ -3489,923 +4375,9 @@ public partial class MainWindow : Window
         PreviewAsset(selected.Asset);
     }
 
-    private void PreviewSelectedMedia()
-    {
-        if (MediaList.SelectedItem is MediaListItem selected) PreviewAsset(selected.Asset);
-    }
-
-    private void PreviewTimelineItem(TimelineItem item)
-    {
-        if (!item.MediaAssetId.HasValue) return;
-        var asset = _project.MediaLibrary.FirstOrDefault(a => a.Id == item.MediaAssetId.Value);
-        if (asset == null) return;
-
-        _previewTimelineItemId = item.Id;
-        if (IsPreviewSurfaceLoadedFor(asset))
-        {
-            PreviewSourceNameText.Text = Path.GetFileName(asset.OriginalPath);
-            return;
-        }
-
-        PreviewAsset(asset, clearTimelineSelection: false);
-    }
-
-    private void PreviewAsset(MediaAsset asset) => PreviewAsset(asset, clearTimelineSelection: true);
-
-    private void PreviewAsset(MediaAsset asset, bool clearTimelineSelection)
-    {
-        if (clearTimelineSelection) _previewTimelineItemId = null;
-        _previewAsset = asset;
-        ClearPreviewMarks();
-        _previewHistory.RemoveAll(item => item.Id == asset.Id);
-        _previewHistory.Insert(0, asset);
-        if (_previewHistory.Count > 12) _previewHistory.RemoveRange(12, _previewHistory.Count - 12);
-        PreviewRecentCombo.ItemsSource = null;
-        PreviewRecentCombo.ItemsSource = _previewHistory;
-        PreviewRecentCombo.SelectedItem = asset;
-
-        if (!File.Exists(asset.OriginalPath))
-        {
-            ClearPreviewSurface("Media file is offline");
-            return;
-        }
-
-        PreviewSourceNameText.Text = Path.GetFileName(asset.OriginalPath);
-        StopPreview();
-        PreviewPlayer.Source = null;
-        PreviewSeekSlider.Value = 0;
-        PreviewSeekSlider.Maximum = 1;
-        PreviewTimeText.Text = "00:00";
-        PreviewDurationText.Text = FormatPreviewTime(TimeSpan.Zero);
-        SetPreviewControlsEnabled(false);
-
-        if (asset.Kind == MediaKind.Image)
-        {
-            try
-            {
-                var image = new BitmapImage();
-                image.BeginInit();
-                image.CacheOption = BitmapCacheOption.OnLoad;
-                image.UriSource = new Uri(asset.OriginalPath);
-                image.EndInit();
-                image.Freeze();
-                PreviewImage.Source = image;
-                PreviewImage.Visibility = Visibility.Visible;
-                PreviewPlayer.Visibility = Visibility.Collapsed;
-                var stillDuration = asset.Duration.Seconds > 0 ? asset.Duration.Seconds : 5;
-                PreviewSeekSlider.Maximum = stillDuration;
-                PreviewDurationText.Text = FormatPreviewTime(TimeSpan.FromSeconds(stillDuration));
-                PreviewTimeBox.Text = "00:00";
-                SetPreviewControlsEnabled(true);
-            }
-            catch (Exception ex)
-            {
-                PreviewImage.Source = null;
-                PreviewSourceNameText.Text = $"Image preview failed: {ex.Message}";
-            }
-            return;
-        }
-
-        if (asset.Kind is not (MediaKind.Video or MediaKind.Audio))
-        {
-            PreviewImage.Source = null;
-            PreviewImage.Visibility = Visibility.Collapsed;
-            PreviewPlayer.Visibility = Visibility.Collapsed;
-            PreviewSourceNameText.Text = "This media type has no source preview";
-            SetPreviewControlsEnabled(false);
-            return;
-        }
-
-        PreviewImage.Source = null;
-        PreviewImage.Visibility = Visibility.Collapsed;
-        PreviewPlayer.Visibility = Visibility.Visible;
-        PreviewPlayer.Source = new Uri(asset.OriginalPath);
-    }
-
-    private void ClearPreviewSurface(string message)
-    {
-        _previewTimelineItemId = null;
-        StopPreview();
-        PreviewPlayer.Source = null;
-        PreviewPlayer.Visibility = Visibility.Collapsed;
-        PreviewImage.Source = null;
-        PreviewImage.Visibility = Visibility.Collapsed;
-        PreviewSeekSlider.Value = 0;
-        PreviewSeekSlider.Maximum = 1;
-        PreviewTimeText.Text = "00:00";
-        PreviewTimeBox.Text = "00:00";
-        PreviewDurationText.Text = "00:00";
-        PreviewSourceNameText.Text = message;
-        SetPreviewControlsEnabled(false);
-    }
-
-    private bool IsPreviewSurfaceLoadedFor(MediaAsset asset)
-    {
-        if (_previewAsset?.Id != asset.Id || !File.Exists(asset.OriginalPath)) return false;
-
-        if (asset.Kind == MediaKind.Image)
-        {
-            return PreviewImage.Source != null && PreviewImage.Visibility == Visibility.Visible;
-        }
-
-        if (asset.Kind is MediaKind.Video or MediaKind.Audio)
-        {
-            return PreviewPlayer.Source != null
-                && string.Equals(PreviewPlayer.Source.LocalPath, asset.OriginalPath, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
-    }
-
-    private void OnPreviewMediaOpened()
-    {
-        if (!PreviewPlayer.NaturalDuration.HasTimeSpan) return;
-        var duration = PreviewPlayer.NaturalDuration.TimeSpan;
-        PreviewSeekSlider.Maximum = Math.Max(0.001, duration.TotalSeconds);
-        PreviewDurationText.Text = FormatPreviewTime(duration);
-        PreviewTimeBox.Text = "00:00";
-        SetPreviewControlsEnabled(true);
-        UpdatePreviewProgress();
-    }
-
-    private void UpdatePreviewProgress()
-    {
-        var position = PreviewPlayer.Visibility == Visibility.Visible
-            ? PreviewPlayer.Position
-            : TimeSpan.Zero;
-        if (PreviewPlayer.Visibility != Visibility.Visible) return;
-
-        if (_previewMarkOutSeconds.HasValue && position.TotalSeconds >= _previewMarkOutSeconds.Value)
-        {
-            if (PreviewLoopToggle.IsChecked == true)
-            {
-                PreviewPlayer.Position = TimeSpan.FromSeconds(_previewMarkInSeconds ?? 0);
-                position = PreviewPlayer.Position;
-            }
-            else
-            {
-                PausePreview();
-                PreviewPlayer.Position = TimeSpan.FromSeconds(_previewMarkOutSeconds.Value);
-                position = PreviewPlayer.Position;
-            }
-        }
-
-        if (!_isPreviewSeeking)
-            PreviewSeekSlider.Value = Math.Clamp(position.TotalSeconds, 0, PreviewSeekSlider.Maximum);
-        var formatted = FormatPreviewTime(position);
-        PreviewTimeText.Text = formatted;
-        if (!PreviewTimeBox.IsKeyboardFocusWithin) PreviewTimeBox.Text = formatted;
-    }
-
-    private static string FormatPreviewTime(TimeSpan value)
-    {
-        if (value.TotalHours >= 1)
-            return value.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
-        return value.ToString(@"mm\:ss", CultureInfo.InvariantCulture);
-    }
-
-    private void SeekPreview(double seconds)
-    {
-        if (PreviewPlayer.Visibility != Visibility.Visible) return;
-        var clamped = Math.Clamp(seconds, 0, PreviewSeekSlider.Maximum);
-        PreviewPlayer.Position = TimeSpan.FromSeconds(clamped);
-        PreviewSeekSlider.Value = clamped;
-        UpdatePreviewProgress();
-    }
-
-    private void StepPreviewFrame(int direction)
-    {
-        PausePreview();
-        SeekPreview(PreviewPlayer.Position.TotalSeconds + direction / 30.0);
-    }
-
-    private void SetPreviewMark(bool isIn)
-    {
-        var value = Math.Clamp(PreviewPlayer.Position.TotalSeconds, 0, PreviewSeekSlider.Maximum);
-        if (isIn)
-        {
-            _previewMarkInSeconds = value;
-            if (_previewMarkOutSeconds.HasValue && _previewMarkOutSeconds.Value < value)
-                _previewMarkOutSeconds = null;
-        }
-        else
-        {
-            _previewMarkOutSeconds = value;
-            if (_previewMarkInSeconds.HasValue && _previewMarkInSeconds.Value > value)
-                _previewMarkInSeconds = null;
-        }
-        UpdatePreviewMarkLabels();
-        StatusText.Text = isIn
-            ? $"Mark In set at {FormatPreviewTime(TimeSpan.FromSeconds(value))}"
-            : $"Mark Out set at {FormatPreviewTime(TimeSpan.FromSeconds(value))}";
-    }
-
-    private void ClearPreviewMarks()
-    {
-        _previewMarkInSeconds = null;
-        _previewMarkOutSeconds = null;
-        UpdatePreviewMarkLabels();
-        StatusText.Text = "Source marks cleared";
-    }
-
-    private void UpdatePreviewMarkLabels()
-    {
-        PreviewMarkInText.Text = _previewMarkInSeconds.HasValue
-            ? $"In {FormatPreviewTime(TimeSpan.FromSeconds(_previewMarkInSeconds.Value))}"
-            : "In --:--";
-        PreviewMarkOutText.Text = _previewMarkOutSeconds.HasValue
-            ? $"Out {FormatPreviewTime(TimeSpan.FromSeconds(_previewMarkOutSeconds.Value))}"
-            : "Out --:--";
-    }
-
-    private void AddPreviewRangeToTimeline(bool overwrite)
-    {
-        if (_previewAsset == null || _timeline == null || _project.MainSequence == null) return;
-        var seq = _project.MainSequence;
-        var sourceStart = Math.Clamp(_previewMarkInSeconds ?? 0, 0, PreviewSeekSlider.Maximum);
-        var sourceEnd = Math.Clamp(_previewMarkOutSeconds ?? PreviewSeekSlider.Maximum, sourceStart, PreviewSeekSlider.Maximum);
-        var durationSeconds = sourceEnd - sourceStart;
-        if (durationSeconds <= 0.001)
-        {
-            StatusText.Text = "Cannot edit source range: Mark Out must be after Mark In";
-            return;
-        }
-
-        var trackKind = _previewAsset.Kind switch
-        {
-            MediaKind.Audio => TrackKind.Audio,
-            MediaKind.Image => TrackKind.Overlay,
-            _ => TrackKind.Video,
-        };
-        var itemKind = _previewAsset.Kind == MediaKind.Image ? ItemKind.Image : ItemKind.Clip;
-        var track = seq.Tracks.FirstOrDefault(t => t.Kind == trackKind && !t.Locked);
-        if (track == null)
-        {
-            track = new Track
-            {
-                Kind = trackKind,
-                Name = trackKind == TrackKind.Audio ? "A1" : trackKind == TrackKind.Overlay ? "O1" : "V1",
-                Order = seq.Tracks.Count,
-            };
-            seq.Tracks.Add(track);
-        }
-
-        var timelineStart = _timeline.PlayheadTime;
-        var duration = MediaTime.FromSeconds(durationSeconds);
-        if (overwrite)
-        {
-            var overwriteEnd = timelineStart.Add(duration);
-            var overlapping = track.Items
-                .Where(item => item.TimelineStart < overwriteEnd && item.TimelineStart.Add(item.Duration) > timelineStart)
-                .ToList();
-            if (overlapping.Count > 0)
-            {
-                var answer = MessageBox.Show(
-                    this,
-                    $"Overwrite will replace {overlapping.Count} item(s) on {track.Name}. Continue?",
-                    "Confirm Overwrite",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
-                if (answer != MessageBoxResult.Yes)
-                {
-                    StatusText.Text = "Overwrite canceled";
-                    return;
-                }
-            }
-
-            foreach (var existing in overlapping)
-                Execute(new DeleteClipCommand { ItemId = existing.Id });
-        }
-
-        Execute(new AddClipCommand
-        {
-            TrackId = track.Id,
-            Item = new TimelineItem
-            {
-                Kind = itemKind,
-                MediaAssetId = _previewAsset.Id,
-                TimelineStart = timelineStart,
-                Duration = duration,
-                SourceStart = MediaTime.FromSeconds(sourceStart),
-                SourceDuration = duration,
-            },
-        });
-        StatusText.Text = overwrite ? "Source range overwritten at playhead" : "Source range inserted at playhead";
-    }
-
-    private void ApplyPreviewSpeed()
-    {
-        if (PreviewSpeedCombo.SelectedItem is ComboBoxItem item
-            && double.TryParse(item.Tag?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var speed))
-            PreviewPlayer.SpeedRatio = speed;
-    }
-
-    private void ApplyPreviewZoom()
-    {
-        if (PreviewZoomCombo.SelectedItem is not ComboBoxItem item
-            || !double.TryParse(item.Tag?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var zoom)) return;
-        PreviewScaleTransform.ScaleX = zoom;
-        PreviewScaleTransform.ScaleY = zoom;
-    }
-
-    private void SavePreviewSnapshot()
-    {
-        if (PreviewSurface.ActualWidth <= 0 || PreviewSurface.ActualHeight <= 0) return;
-        var dialog = new SaveFileDialog
-        {
-            Filter = "PNG image (*.png)|*.png",
-            FileName = $"rushframe-frame-{DateTime.Now:yyyyMMdd-HHmmss}.png",
-            DefaultExt = ".png",
-        };
-        if (dialog.ShowDialog(this) != true) return;
-
-        var bitmap = new RenderTargetBitmap(
-            Math.Max(1, (int)Math.Ceiling(PreviewSurface.ActualWidth)),
-            Math.Max(1, (int)Math.Ceiling(PreviewSurface.ActualHeight)),
-            96,
-            96,
-            PixelFormats.Pbgra32);
-        bitmap.Render(PreviewSurface);
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        using var stream = File.Create(dialog.FileName);
-        encoder.Save(stream);
-        StatusText.Text = "Snapshot saved";
-    }
-
-    private void TogglePreviewFullscreen()
-    {
-        _previewFullscreen = !_previewFullscreen;
-        if (_previewFullscreen)
-        {
-            Panel.SetZIndex(PreviewBorder, 1000);
-            Grid.SetColumn(PreviewBorder, 0);
-            Grid.SetColumnSpan(PreviewBorder, 5);
-            Grid.SetRow(PreviewBorder, 0);
-            Grid.SetRowSpan(PreviewBorder, 3);
-            PreviewFullscreenButton.Content = "⤢";
-        }
-        else
-        {
-            Panel.SetZIndex(PreviewBorder, 0);
-            Grid.SetColumn(PreviewBorder, 2);
-            Grid.SetColumnSpan(PreviewBorder, 1);
-            Grid.SetRow(PreviewBorder, 0);
-            Grid.SetRowSpan(PreviewBorder, 1);
-            PreviewFullscreenButton.Content = "⛶";
-        }
-    }
-
-    private void OnPreviewKeyboardShortcut(object sender, KeyEventArgs args)
-    {
-        if (Keyboard.FocusedElement is TextBox or ComboBox) return;
-        switch (args.Key)
-        {
-            case Key.Space:
-                if (_isPreviewPlaying) PausePreview(); else PlayPreview();
-                args.Handled = true;
-                break;
-            case Key.Left:
-                StepPreviewFrame(-1);
-                args.Handled = true;
-                break;
-            case Key.Right:
-                StepPreviewFrame(1);
-                args.Handled = true;
-                break;
-            case Key.I:
-                SetPreviewMark(true);
-                args.Handled = true;
-                break;
-            case Key.O:
-                SetPreviewMark(false);
-                args.Handled = true;
-                break;
-            case Key.J:
-                PausePreview();
-                SeekPreview(PreviewPlayer.Position.TotalSeconds - 1);
-                args.Handled = true;
-                break;
-            case Key.K:
-                PausePreview();
-                args.Handled = true;
-                break;
-            case Key.L:
-                PlayPreview();
-                args.Handled = true;
-                break;
-            case Key.Escape when _previewFullscreen:
-                TogglePreviewFullscreen();
-                args.Handled = true;
-                break;
-        }
-    }
-
-    private static bool TryParsePreviewTime(string text, out double seconds)
-    {
-        seconds = 0;
-        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var raw))
-        {
-            seconds = raw;
-            return true;
-        }
-        if (TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out var time))
-        {
-            seconds = time.TotalSeconds;
-            return true;
-        }
-        return false;
-    }
-
-    private void SelectTransition(TransitionSelection? selection)
-    {
-        if (selection == null)
-        {
-            _selectedTransitionSelection = null;
-            if (_selectedInspectorItem == null) UpdateInspector(null);
-            return;
-        }
-
-        var transition = selection.Transition;
-        if (transition == null && _project.MainSequence != null)
-        {
-            Execute(new ApplyTransitionCommand
-            {
-                LeftItemId = selection.LeftItem.Id,
-                RightItemId = selection.RightItem.Id,
-                Kind = TransitionKind.CrossDissolve,
-                Duration = MediaTime.FromSeconds(0.5),
-                Alignment = 0.5,
-            });
-            transition = _project.MainSequence.Transitions.FirstOrDefault(candidate =>
-                candidate.LeftItemId == selection.LeftItem.Id && candidate.RightItemId == selection.RightItem.Id);
-            _timeline?.SelectTransition(transition, selection.TrackIndex);
-        }
-
-        _selectedInspectorItem = null;
-        _selectedTransitionSelection = selection with { Transition = transition };
-        UpdateTransitionInspector(_selectedTransitionSelection);
-    }
-
-    private void UpdateTransitionInspector(TransitionSelection selection)
-    {
-        var transition = selection.Transition;
-        _suppressInspectorChangeTracking = true;
-        try
-        {
-            InspectorPanel.IsEnabled = true;
-            InspectorPanel.Visibility = Visibility.Visible;
-            InspectorEmptyState.Visibility = Visibility.Collapsed;
-            InspectorTabs.SelectedIndex = 0;
-            InspectorTitle.Text = transition == null ? "Transition slot" : $"{transition.Kind} transition";
-            StatusText.Text = "Selected transition";
-            TransitionInspectorCard.Visibility = Visibility.Visible;
-            TransitionKindCombo.SelectedItem = transition?.Kind ?? TransitionKind.CrossDissolve;
-            TransitionDurationBox.Text = Format(transition?.Duration.Seconds ?? 0.5);
-            TransitionAlignmentBox.Text = Format((transition?.Alignment ?? 0.5) * 100);
-        }
-        finally
-        {
-            _suppressInspectorChangeTracking = false;
-        }
-        SetInspectorDirty(false);
-    }
-
-    private void UpdateInspector(TimelineItem? item)
-    {
-        _suppressInspectorChangeTracking = true;
-        try
-        {
-            InspectorPanel.IsEnabled = item != null;
-            InspectorPanel.Visibility = item == null ? Visibility.Collapsed : Visibility.Visible;
-            InspectorEmptyState.Visibility = item == null ? Visibility.Visible : Visibility.Collapsed;
-            var itemLabel = item == null ? null : GetInspectorItemLabel(item.Kind);
-            InspectorTitle.Text = item == null ? "No clip selected" : itemLabel;
-            StatusText.Text = item == null ? "Ready" : $"Selected {itemLabel!.ToLowerInvariant()}";
-            TransitionInspectorCard.Visibility = Visibility.Collapsed;
-
-            PositionXBox.Text = Format(item?.Transform.PositionX ?? 0);
-            PositionYBox.Text = Format(item?.Transform.PositionY ?? 0);
-            ScaleBox.Text = Format(item?.Transform.ScaleX ?? 1);
-            RotationBox.Text = Format(item?.Transform.RotationDegrees ?? 0);
-            OpacityBox.Text = Format((item?.Opacity ?? 1) * 100);
-            SpeedBox.Text = Format(item?.SpeedCurve?.ConstantSpeed ?? item?.Speed ?? 1);
-            ReverseToggle.IsChecked = item?.Reversed ?? false;
-            VolumeBox.Text = Format((item?.Volume ?? 1) * 100);
-            PanBox.Text = Format((item?.Pan ?? 0) * 100);
-
-            var color = item?.ColorCorrection;
-            var brightness = color?.Brightness ?? 0;
-            var contrast = color?.Contrast ?? 0;
-            var saturation = color?.Saturation ?? 1;
-            BrightnessSlider.Value = brightness;
-            ContrastSlider.Value = contrast;
-            SaturationSlider.Value = saturation;
-            BrightnessBox.Text = Format(brightness);
-            ContrastBox.Text = Format(contrast);
-            SaturationBox.Text = Format(saturation);
-            BlackWhiteToggle.IsChecked = color?.BlackAndWhite ?? false;
-            StabilizeToggle.IsChecked = item?.Stabilization?.Enabled ?? false;
-
-            AddEffectButton.IsEnabled = item != null && EffectCombo.SelectedItem != null;
-            AnalyzeStabilizationButton.IsEnabled = item?.MediaAssetId != null && !_isMediaOperationRunning;
-            var selectedEffectId = (EffectList.SelectedItem as EffectListEntry)?.Effect.Id;
-            EffectList.Items.Clear();
-            if (item != null)
-            {
-                foreach (var effect in item.Effects)
-                {
-                    var definition = _effectRegistry.Get(effect.EffectTypeId);
-                    EffectList.Items.Add(new EffectListEntry(
-                        effect,
-                        definition?.Name ?? effect.EffectTypeId,
-                        definition?.Category ?? "custom"));
-                }
-            }
-            if (selectedEffectId.HasValue)
-            {
-                EffectList.SelectedItem = EffectList.Items
-                    .OfType<EffectListEntry>()
-                    .FirstOrDefault(entry => entry.Effect.Id == selectedEffectId.Value);
-            }
-            UpdateSelectedEffectEditor();
-        }
-        finally
-        {
-            _suppressInspectorChangeTracking = false;
-        }
-        SetInspectorDirty(false);
-        CommandManager.InvalidateRequerySuggested();
-    }
-
-    private static string GetInspectorItemLabel(ItemKind kind) => kind switch
-    {
-        ItemKind.Clip => "Media clip",
-        ItemKind.Text => "Text clip",
-        ItemKind.Image => "Image clip",
-        ItemKind.Sticker => "Sticker",
-        ItemKind.AdjustmentLayer => "Adjustment layer",
-        _ => $"{kind} item",
-    };
-
-    private void ApplyInspectorSettings()
-    {
-        if (_selectedTransitionSelection != null)
-        {
-            ApplyTransitionInspectorSettings(_selectedTransitionSelection);
-            return;
-        }
-
-        var item = _selectedInspectorItem;
-        if (item == null) return;
-
-        if (!TryReadNumber(PositionXBox, "position X", out var positionX)
-            || !TryReadNumber(PositionYBox, "position Y", out var positionY)
-            || !TryReadNumber(ScaleBox, "scale", out var scale)
-            || !TryReadNumber(RotationBox, "rotation", out var rotation)
-            || !TryReadNumber(OpacityBox, "opacity", out var opacityPercent)
-            || !TryReadNumber(SpeedBox, "speed", out var speedValue)
-            || !TryReadNumber(VolumeBox, "volume", out var volumePercent)
-            || !TryReadNumber(PanBox, "pan", out var panPercent)
-            || !TryReadNumber(BrightnessBox, "brightness", out var brightness)
-            || !TryReadNumber(ContrastBox, "contrast", out var contrast)
-            || !TryReadNumber(SaturationBox, "saturation", out var saturation))
-            return;
-
-        var transform = new TransformSnapshot(
-            positionX,
-            positionY,
-            Math.Max(0.01, scale),
-            rotation);
-        var opacity = Math.Clamp(opacityPercent / 100, 0, 1);
-        var reversed = ReverseToggle.IsChecked ?? false;
-        var speed = Math.Clamp(speedValue, 0.1, 100);
-        var volume = Math.Clamp(volumePercent / 100, 0, 4);
-        var pan = Math.Clamp(panPercent / 100, -1, 1);
-        var color = new ColorCorrection
-        {
-            Brightness = Math.Clamp(brightness, -1, 1),
-            Contrast = Math.Clamp(contrast, -1, 3),
-            Saturation = Math.Clamp(saturation, 0, 4),
-            BlackAndWhite = BlackWhiteToggle.IsChecked ?? false,
-        };
-        var stabilization = new StabilizationSettings
-        {
-            Enabled = StabilizeToggle.IsChecked ?? false,
-            Strength = item.Stabilization?.Strength ?? 0.5,
-            CropZoomCompensation = item.Stabilization?.CropZoomCompensation ?? true,
-            AnalysisComplete = item.Stabilization?.AnalysisComplete ?? false,
-        };
-
-        var transformCommand = new SetPropertyCommand
-        {
-            ItemId = item.Id,
-            PropertyName = nameof(TimelineItem.Transform),
-            NewValue = transform,
-            Getter = i => new TransformSnapshot(i.Transform.PositionX, i.Transform.PositionY, i.Transform.ScaleX, i.Transform.RotationDegrees),
-            Setter = (i, v) =>
-            {
-                if (v is not TransformSnapshot t) return;
-                i.Transform.PositionX = t.X;
-                i.Transform.PositionY = t.Y;
-                i.Transform.ScaleX = t.Scale;
-                i.Transform.ScaleY = t.Scale;
-                i.Transform.RotationDegrees = t.Rotation;
-            },
-        };
-
-        Execute(new CompositeEditCommand("Apply clip settings", new IEditCommand[]
-        {
-            transformCommand,
-            SetValue(item, nameof(TimelineItem.Opacity), opacity, i => i.Opacity, (i, v) => i.Opacity = (double)v!),
-            SetValue(item, nameof(TimelineItem.Reversed), reversed, i => i.Reversed, (i, v) => i.Reversed = (bool)v!),
-            SetValue(item, nameof(TimelineItem.SpeedCurve), new SpeedCurve { ConstantSpeed = speed, PreservePitch = true }, i => i.SpeedCurve, (i, v) => i.SpeedCurve = (SpeedCurve?)v),
-            SetValue(item, nameof(TimelineItem.Volume), volume, i => i.Volume, (i, v) => i.Volume = (double)v!),
-            SetValue(item, nameof(TimelineItem.Pan), pan, i => i.Pan, (i, v) => i.Pan = (double)v!),
-            SetValue(item, nameof(TimelineItem.ColorCorrection), color, i => i.ColorCorrection, (i, v) => i.ColorCorrection = (ColorCorrection?)v),
-            SetValue(item, nameof(TimelineItem.Stabilization), stabilization, i => i.Stabilization, (i, v) => i.Stabilization = (StabilizationSettings?)v),
-        }));
-    }
-
-    private void ApplyTransitionInspectorSettings(TransitionSelection selection)
-    {
-        var kind = TransitionKindCombo.SelectedItem is TransitionKind selectedKind
-            ? selectedKind
-            : TransitionKind.CrossDissolve;
-        if (!TryReadNumber(TransitionDurationBox, "transition duration", out var durationValue)
-            || !TryReadNumber(TransitionAlignmentBox, "transition alignment", out var alignmentPercent))
-            return;
-        var duration = Math.Clamp(durationValue, 0.05, 10);
-        var alignment = Math.Clamp(alignmentPercent / 100, 0, 1);
-
-        Execute(new ApplyTransitionCommand
-        {
-            LeftItemId = selection.LeftItem.Id,
-            RightItemId = selection.RightItem.Id,
-            Kind = kind,
-            Duration = MediaTime.FromSeconds(duration),
-            Alignment = alignment,
-        });
-
-        var updated = _project.MainSequence?.Transitions.FirstOrDefault(candidate =>
-            candidate.LeftItemId == selection.LeftItem.Id && candidate.RightItemId == selection.RightItem.Id);
-        _selectedTransitionSelection = selection with { Transition = updated };
-        _timeline?.SelectTransition(updated, selection.TrackIndex);
-        if (_selectedTransitionSelection != null) UpdateTransitionInspector(_selectedTransitionSelection);
-    }
-
-    private void AddSelectedEffect()
-    {
-        if (_selectedInspectorItem == null || EffectCombo.SelectedItem is not EffectDefinition effect) return;
-        Execute(new AddEffectCommand
-        {
-            ItemId = _selectedInspectorItem.Id,
-            EffectTypeId = effect.EffectTypeId,
-            Parameters = effect.Parameters.ToDictionary(p => p.Name, p => p.DefaultValue),
-        });
-    }
-
-    private void UpdateSelectedEffectEditor()
-    {
-        var entry = EffectList.SelectedItem as EffectListEntry;
-        var hasSelection = entry != null && _selectedInspectorItem != null;
-        EffectRemoveButton.IsEnabled = hasSelection;
-        EffectMoveUpButton.IsEnabled = hasSelection && EffectList.SelectedIndex > 0;
-        EffectMoveDownButton.IsEnabled = hasSelection && EffectList.SelectedIndex >= 0 && EffectList.SelectedIndex < EffectList.Items.Count - 1;
-        EffectToggleButton.IsEnabled = hasSelection;
-        EffectDuplicateButton.IsEnabled = hasSelection;
-        EffectResetButton.IsEnabled = hasSelection;
-        EffectApplyParametersButton.IsEnabled = hasSelection;
-        EffectToggleButton.Content = entry?.Effect.Enabled == true ? "Disable" : "Enable";
-
-        _effectParameterEditors.Clear();
-        EffectParameterPanel.Children.Clear();
-        if (entry == null)
-        {
-            EffectParameterPanel.Children.Add(new TextBlock
-            {
-                Text = "Select an applied effect to edit its parameters.",
-                Foreground = (Brush)FindResource("TextMutedBrush"),
-                FontSize = 10.5,
-                TextWrapping = TextWrapping.Wrap,
-            });
-            return;
-        }
-
-        var definition = _effectRegistry.Get(entry.Effect.EffectTypeId);
-        if (definition == null || definition.Parameters.Count == 0)
-        {
-            EffectParameterPanel.Children.Add(new TextBlock
-            {
-                Text = "This effect has no editable parameters.",
-                Foreground = (Brush)FindResource("TextMutedBrush"),
-                FontSize = 10.5,
-            });
-            return;
-        }
-
-        foreach (var parameter in definition.Parameters)
-        {
-            var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var label = new TextBlock
-            {
-                Text = FormatEffectParameterName(parameter.Name),
-                Foreground = (Brush)FindResource("TextMutedBrush"),
-                FontSize = 10.5,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var value = entry.Effect.Parameters.TryGetValue(parameter.Name, out var current)
-                ? ConvertEffectValue(current, parameter.DefaultValue)
-                : Convert.ToDouble(parameter.DefaultValue, CultureInfo.InvariantCulture);
-            var editor = new TextBox
-            {
-                Text = value.ToString("0.###", CultureInfo.InvariantCulture),
-                ToolTip = $"Range: {parameter.Min:0.###} to {parameter.Max:0.###}",
-                MinHeight = 28,
-            };
-            Grid.SetColumn(editor, 1);
-            grid.Children.Add(label);
-            grid.Children.Add(editor);
-            EffectParameterPanel.Children.Add(grid);
-            _effectParameterEditors[parameter.Name] = editor;
-        }
-    }
-
-    private void RemoveSelectedEffect()
-    {
-        if (_selectedInspectorItem == null || EffectList.SelectedItem is not EffectListEntry entry) return;
-        Execute(new RemoveEffectCommand { ItemId = _selectedInspectorItem.Id, EffectInstanceId = entry.Effect.Id });
-    }
-
-    private void MoveSelectedEffect(int offset)
-    {
-        if (_selectedInspectorItem == null || EffectList.SelectedItem is not EffectListEntry entry) return;
-        var newIndex = Math.Clamp(EffectList.SelectedIndex + offset, 0, EffectList.Items.Count - 1);
-        Execute(new ReorderEffectCommand
-        {
-            ItemId = _selectedInspectorItem.Id,
-            EffectInstanceId = entry.Effect.Id,
-            NewIndex = newIndex,
-        });
-        EffectList.SelectedIndex = newIndex;
-    }
-
-    private void ToggleSelectedEffect()
-    {
-        if (_selectedInspectorItem == null || EffectList.SelectedItem is not EffectListEntry entry) return;
-        Execute(new UpdateEffectCommand
-        {
-            ItemId = _selectedInspectorItem.Id,
-            EffectInstanceId = entry.Effect.Id,
-            Enabled = !entry.Effect.Enabled,
-            Parameters = new Dictionary<string, object>(entry.Effect.Parameters),
-        });
-    }
-
-    private void DuplicateSelectedEffect()
-    {
-        if (_selectedInspectorItem == null || EffectList.SelectedItem is not EffectListEntry entry) return;
-        Execute(new AddEffectCommand
-        {
-            ItemId = _selectedInspectorItem.Id,
-            EffectTypeId = entry.Effect.EffectTypeId,
-            Parameters = new Dictionary<string, object>(entry.Effect.Parameters),
-        });
-        EffectList.SelectedIndex = EffectList.Items.Count - 1;
-    }
-
-    private void ResetSelectedEffect()
-    {
-        if (_selectedInspectorItem == null || EffectList.SelectedItem is not EffectListEntry entry) return;
-        var definition = _effectRegistry.Get(entry.Effect.EffectTypeId);
-        if (definition == null) return;
-        Execute(new UpdateEffectCommand
-        {
-            ItemId = _selectedInspectorItem.Id,
-            EffectInstanceId = entry.Effect.Id,
-            Enabled = true,
-            Parameters = definition.Parameters.ToDictionary(parameter => parameter.Name, parameter => parameter.DefaultValue),
-        });
-    }
-
-    private void ApplySelectedEffectParameters()
-    {
-        if (_selectedInspectorItem == null || EffectList.SelectedItem is not EffectListEntry entry) return;
-        var definition = _effectRegistry.Get(entry.Effect.EffectTypeId);
-        if (definition == null) return;
-
-        var parameters = new Dictionary<string, object>();
-        foreach (var parameter in definition.Parameters)
-        {
-            if (!_effectParameterEditors.TryGetValue(parameter.Name, out var editor)
-                || !double.TryParse(editor.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
-            {
-                StatusText.Text = $"Invalid value for {FormatEffectParameterName(parameter.Name)}";
-                editor?.Focus();
-                return;
-            }
-
-            var clamped = Math.Clamp(parsed, parameter.Min, parameter.Max);
-            parameters[parameter.Name] = parameter.Type.Equals("int", StringComparison.OrdinalIgnoreCase)
-                ? (object)(int)Math.Round(clamped)
-                : clamped;
-        }
-
-        Execute(new UpdateEffectCommand
-        {
-            ItemId = _selectedInspectorItem.Id,
-            EffectInstanceId = entry.Effect.Id,
-            Enabled = entry.Effect.Enabled,
-            Parameters = parameters,
-        });
-    }
-
-    private static double ConvertEffectValue(object value, object fallback)
-    {
-        try
-        {
-            if (value is JsonElement json && json.ValueKind == JsonValueKind.Number && json.TryGetDouble(out var number))
-                return number;
-            return Convert.ToDouble(value, CultureInfo.InvariantCulture);
-        }
-        catch
-        {
-            return Convert.ToDouble(fallback, CultureInfo.InvariantCulture);
-        }
-    }
-
-    private static string FormatEffectParameterName(string name) =>
-        CultureInfo.InvariantCulture.TextInfo.ToTitleCase(name.Replace('_', ' '));
-
-    private async Task AnalyzeSelectedStabilizationAsync()
-    {
-        var item = _selectedInspectorItem;
-        if (item?.MediaAssetId == null) return;
-        var asset = _project.MediaLibrary.FirstOrDefault(a => a.Id == item.MediaAssetId.Value);
-        if (asset == null) return;
-
-        var current = item.Stabilization;
-        var settings = new StabilizationSettings
-        {
-            Enabled = true,
-            Strength = current?.Strength ?? 0.5,
-            CropZoomCompensation = current?.CropZoomCompensation ?? true,
-            AnalysisComplete = current?.AnalysisComplete ?? false,
-        };
-        AddRenderQueueMessage($"Stabilization: analyzing {Path.GetFileName(asset.OriginalPath)}");
-        SetMediaOperationState(true, $"Analyzing motion in {Path.GetFileName(asset.OriginalPath)}…");
-        try
-        {
-            await _stabilizationService.AnalyzeAsync(asset, settings);
-            Execute(SetValue(item, nameof(TimelineItem.Stabilization), settings, i => i.Stabilization, (i, v) => i.Stabilization = (StabilizationSettings?)v));
-            AddRenderQueueMessage("Stabilization: analysis complete");
-        }
-        catch (Exception ex)
-        {
-            AddRenderQueueMessage($"Stabilization failed: {ex.Message}");
-        }
-        finally
-        {
-            SetMediaOperationState(false, "Stabilization analysis finished");
-        }
-    }
-
-    private static SetPropertyCommand SetValue<T>(TimelineItem item, string propertyName, T value, Func<TimelineItem, T> getter, Action<TimelineItem, object?> setter) =>
-        new()
-        {
-            ItemId = item.Id,
-            PropertyName = propertyName,
-            NewValue = value,
-            Getter = i => getter(i),
-            Setter = setter,
-        };
-
-    private static double ParseDouble(string value, double fallback) =>
-        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
-
-    private static string Format(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
-
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
-    private sealed record TransformSnapshot(double X, double Y, double Scale, double Rotation);
-
-    private sealed record AgentAuditEntry(
-        DateTimeOffset TimestampUtc,
-        string Action,
-        string Summary,
-        bool Success,
-        string? Error);
-
-    private sealed record AgentEditBuildResult(bool Success, IEditCommand? Command, string Summary, string? Error)
-    {
-        public static AgentEditBuildResult Ok(IEditCommand command, string summary) =>
-            new(true, command, summary, null);
-
-        public static AgentEditBuildResult Fail(string error) =>
-            new(false, null, string.Empty, error);
-    }
+    private sealed record GroupClipboardItem(TimelineItem Item, int TrackIndex, MediaTime RelativeStart);
 
     private static MediaKind GetMediaKind(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
@@ -4417,51 +4389,23 @@ public partial class MainWindow : Window
         _ => MediaKind.Other,
     };
 
-    private MediaListItem CreateMediaListItem(MediaAsset asset)
+    private string GetMediaThumbnailPath(MediaAsset asset) => asset.Kind switch
     {
-        var previewPath = asset.Kind switch
-        {
-            MediaKind.Image => asset.OriginalPath,
-            MediaKind.Video => Path.Combine(_appData, "Cache", "thumbnails", $"{asset.Id}.jpg"),
-            MediaKind.Audio => Path.Combine(_appData, "Cache", "waveforms", $"{asset.Id}.png"),
-            _ => string.Empty,
-        };
+        MediaKind.Image => asset.OriginalPath,
+        MediaKind.Video => Path.Combine(_appData, "Cache", "thumbnails", $"{asset.Id}.jpg"),
+        MediaKind.Audio => Path.Combine(_appData, "Cache", "waveforms", $"{asset.Id}.png"),
+        _ => string.Empty,
+    };
 
-        return new MediaListItem(
-            asset,
-            LoadThumbnail(previewPath),
-            asset.Kind switch
-            {
-                MediaKind.Video => "VID",
-                MediaKind.Audio => "AUD",
-                MediaKind.Image => "IMG",
-                MediaKind.Subtitle => "CC",
-                MediaKind.Font => "FONT",
-                _ => "FILE",
-            },
-            FormatDuration(asset.Duration));
-    }
-
-    private static ImageSource? LoadThumbnail(string path)
+    private static string GetMediaFallbackGlyph(MediaKind kind) => kind switch
     {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
-
-        try
-        {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.DecodePixelWidth = 240;
-            bitmap.UriSource = new Uri(path, UriKind.Absolute);
-            bitmap.EndInit();
-            bitmap.Freeze();
-            return bitmap;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+        MediaKind.Video => "VID",
+        MediaKind.Audio => "AUD",
+        MediaKind.Image => "IMG",
+        MediaKind.Subtitle => "CC",
+        MediaKind.Font => "FONT",
+        _ => "FILE",
+    };
 
     private static string FormatDuration(MediaTime duration)
     {
@@ -4475,11 +4419,95 @@ public partial class MainWindow : Window
         public string DisplayName => $"{(Effect.Enabled ? "On" : "Off")}  {Name}  ·  {Category}";
     }
 
-    private sealed record MediaListItem(MediaAsset Asset, ImageSource? Thumbnail, string FallbackGlyph, string DurationText)
+    private sealed class MediaListItem : INotifyPropertyChanged
     {
+        private ImageSource? _thumbnail;
+        private string _thumbnailPath;
+        private string? _loadingPath;
+        private bool _thumbnailLoadAttempted;
+
+        public MediaListItem(
+            MediaAsset asset,
+            string thumbnailPath,
+            string fallbackGlyph,
+            string durationText)
+        {
+            Asset = asset;
+            _thumbnailPath = thumbnailPath;
+            FallbackGlyph = fallbackGlyph;
+            DurationText = durationText;
+        }
+
+        public MediaAsset Asset { get; private set; }
+        public ImageSource? Thumbnail
+        {
+            get => _thumbnail;
+            private set
+            {
+                if (ReferenceEquals(_thumbnail, value)) return;
+                _thumbnail = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
+            }
+        }
+        public string ThumbnailPath => _thumbnailPath;
+        public string FallbackGlyph { get; private set; }
+        public string DurationText { get; private set; }
         public string FileName => Path.GetFileName(Asset.OriginalPath);
         public string KindText => Asset.Kind.ToString().ToUpperInvariant();
         public string FolderPath => Path.GetDirectoryName(Asset.OriginalPath) ?? string.Empty;
+        public string FolderDisplayName
+        {
+            get
+            {
+                var trimmed = FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return string.IsNullOrWhiteSpace(trimmed)
+                    ? "Project root"
+                    : Path.GetFileName(trimmed);
+            }
+        }
         public bool HasDuration => !string.IsNullOrEmpty(DurationText);
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public void Update(
+            MediaAsset asset,
+            string thumbnailPath,
+            string fallbackGlyph,
+            string durationText)
+        {
+            var thumbnailChanged = !string.Equals(
+                _thumbnailPath,
+                thumbnailPath,
+                StringComparison.OrdinalIgnoreCase);
+            Asset = asset;
+            _thumbnailPath = thumbnailPath;
+            FallbackGlyph = fallbackGlyph;
+            DurationText = durationText;
+            if (thumbnailChanged)
+            {
+                Thumbnail = null;
+                _thumbnailLoadAttempted = false;
+                _loadingPath = null;
+            }
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+        }
+
+        public bool TryBeginThumbnailLoad()
+        {
+            if (_thumbnailLoadAttempted
+                || string.IsNullOrWhiteSpace(_thumbnailPath)
+                || string.Equals(_loadingPath, _thumbnailPath, StringComparison.OrdinalIgnoreCase))
+                return false;
+            _thumbnailLoadAttempted = true;
+            _loadingPath = _thumbnailPath;
+            return true;
+        }
+
+        public void CompleteThumbnailLoad(string path, ImageSource? thumbnail)
+        {
+            if (!string.Equals(path, _thumbnailPath, StringComparison.OrdinalIgnoreCase)) return;
+            _loadingPath = null;
+            Thumbnail = thumbnail;
+        }
     }
 }

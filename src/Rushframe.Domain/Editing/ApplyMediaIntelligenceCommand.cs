@@ -23,8 +23,25 @@ public sealed class ApplyMediaIntelligenceCommand : IEditCommand
         var target = targetTrack?.Items.FirstOrDefault(item => item.Id == TargetItemId);
         if (target == null)
             return EditResult.Fail("Target timeline item was not found");
+        if (targetTrack!.Locked)
+            return EditResult.Fail("Track is locked");
+        if (target.Locked)
+            return EditResult.Fail("Item is locked");
+        if (sequence.Tracks.Any(track => track.Locked && track.Items.Any(item =>
+                item.MediaIntelligenceSourceAssetId == Analysis.MediaAssetId)))
+            return EditResult.Fail("Generated media-intelligence content is on a locked track");
+        if (sequence.Tracks.SelectMany(track => track.Items).Any(item =>
+                item.Locked && item.MediaIntelligenceSourceAssetId == Analysis.MediaAssetId))
+            return EditResult.Fail("Generated media-intelligence content is locked");
         if (target.MediaAssetId != Analysis.MediaAssetId)
             return EditResult.Fail("Analysis does not belong to the selected timeline item");
+
+        var existingCaptionTrack = AddCaptionClips
+            ? sequence.Tracks.FirstOrDefault(track =>
+                track.Kind == TrackKind.Text && string.Equals(track.Name, "AI Captions", StringComparison.OrdinalIgnoreCase))
+            : null;
+        if (existingCaptionTrack?.Locked == true)
+            return EditResult.Fail("Caption track is locked");
 
         RemovePreviousGeneratedContent(sequence);
 
@@ -59,8 +76,7 @@ public sealed class ApplyMediaIntelligenceCommand : IEditCommand
 
         if (AddCaptionClips)
         {
-            var captionTrack = sequence.Tracks.FirstOrDefault(track =>
-                track.Kind == TrackKind.Text && string.Equals(track.Name, "AI Captions", StringComparison.OrdinalIgnoreCase));
+            var captionTrack = existingCaptionTrack;
             if (captionTrack == null)
             {
                 captionTrack = new Track

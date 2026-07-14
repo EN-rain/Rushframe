@@ -14,28 +14,13 @@ public sealed class DuplicateClipCommand : IEditCommand
         {
             var idx = track.Items.FindIndex(i => i.Id == ItemId);
             if (idx < 0) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (track.Items[idx].Locked) return EditResult.Fail("Item is locked");
 
             var original = track.Items[idx];
-            _duplicate = new TimelineItem
-            {
-                Kind = original.Kind,
-                MediaAssetId = original.MediaAssetId,
-                TimelineStart = original.TimelineStart.Add(original.Duration),
-                Duration = original.Duration,
-                SourceStart = original.SourceStart,
-                SourceDuration = original.SourceDuration,
-                Speed = original.Speed,
-                Volume = original.Volume,
-                Opacity = original.Opacity,
-                Transform = new Transform2D
-                {
-                    PositionX = original.Transform.PositionX,
-                    PositionY = original.Transform.PositionY,
-                    ScaleX = original.Transform.ScaleX,
-                    ScaleY = original.Transform.ScaleY,
-                    RotationDegrees = original.Transform.RotationDegrees,
-                },
-            };
+            _duplicate = TimelineItemCloner.Clone(
+                original,
+                original.TimelineStart.Add(original.Duration));
 
             track.Items.Insert(idx + 1, _duplicate);
             return EditResult.Ok();

@@ -8,7 +8,14 @@ from dataclasses import asdict
 from pathlib import Path
 
 from rushframe_intelligence.audio_analyzer import analyze_audio_metrics
-from rushframe_intelligence.cache import create_manifest, is_cache_valid, load_manifest, source_checksum
+from rushframe_intelligence.cache import (
+    create_manifest,
+    is_cache_valid,
+    is_fast_cache_valid,
+    load_manifest,
+    source_checksum,
+    source_fast_fingerprint,
+)
 from rushframe_intelligence.context_index import MediaContextIndex
 from rushframe_intelligence.duplicate_detector import find_duplicate_takes
 from rushframe_intelligence.ffmpeg_tools import resolve_tool_path, run_tool
@@ -92,10 +99,18 @@ class MediaIntelligencePipeline:
         if enable_embeddings:
             enabled_features.append("embeddings")
 
-        checksum = source_checksum(source)
         manifest_path = destination / "manifest.json"
         analysis_path = destination / "media-analysis.json"
         existing_manifest = load_manifest(manifest_path)
+        fast_fingerprint = source_fast_fingerprint(source)
+        if (
+            not force
+            and analysis_path.is_file()
+            and is_fast_cache_valid(existing_manifest, source, fast_fingerprint, enabled_features)
+        ):
+            return load_analysis(analysis_path)
+
+        checksum = source_checksum(source)
         if (
             not force
             and analysis_path.is_file()

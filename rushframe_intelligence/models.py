@@ -181,6 +181,7 @@ class AnalysisManifest:
     source_checksum: str
     source_size: int
     source_modified_utc: str
+    source_fast_fingerprint: str = ""
     analysis_version: int = ANALYSIS_VERSION
     schema_version: str = SCHEMA_VERSION
     pipeline_version: str = "rushframe-intelligence-2"

@@ -22,6 +22,8 @@ public sealed class MoveClipCommand : IEditCommand
         {
             var idx = track.Items.FindIndex(i => i.Id == ItemId);
             if (idx < 0) continue;
+            if (track.Locked)
+                return EditResult.Fail("Track is locked");
 
             _sourceTrackId = track.Id;
             _oldStart = track.Items[idx].TimelineStart;
@@ -29,12 +31,16 @@ public sealed class MoveClipCommand : IEditCommand
             _oldIndex = idx;
 
             var item = track.Items[idx];
+            if (item.Locked)
+                return EditResult.Fail("Item is locked");
 
             if (TargetTrackId.HasValue && TargetTrackId.Value != track.Id)
             {
                 var destTrack = sequence.Tracks.FirstOrDefault(t => t.Id == TargetTrackId.Value);
                 if (destTrack == null)
                     return EditResult.Fail(new TrackNotFoundError(TargetTrackId.Value));
+                if (destTrack.Locked)
+                    return EditResult.Fail("Track is locked");
 
                 if (!TrackCompatibility.IsItemCompatibleWithTrack(item.Kind, destTrack.Kind))
                     return EditResult.Fail(new ValidationError(

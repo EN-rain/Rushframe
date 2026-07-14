@@ -8,6 +8,11 @@ obj/
 # Test results
 tests/**/TestResults/
 tests/**/coverage/
+BenchmarkDotNet.Artifacts/
+qa testing/results/performance/workloads/
+qa testing/results/performance/traces/
+qa testing/results/performance/dumps/
+qa testing/results/performance/baseline-*/
 
 # IDE files
 .vs/

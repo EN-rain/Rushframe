@@ -1,0 +1,3 @@
+-r requirements-intelligence.txt
+pytest>=8.0
+pytest-timeout>=2.3

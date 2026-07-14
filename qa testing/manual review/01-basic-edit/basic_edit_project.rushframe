@@ -1,0 +1,541 @@
+{
+  "id": {
+    "value": "b1b0ee17-a997-4f67-abd5-7f4755aa89b4"
+  },
+  "name": "Untitled",
+  "sequences": [
+    {
+      "id": {
+        "value": "7976e0ec-7863-41d0-89e2-2d692fca58d2"
+      },
+      "name": "Main",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "tracks": [
+        {
+          "id": {
+            "value": "15dfcc9f-85ec-4c72-83c5-59ee79979cfc"
+          },
+          "kind": "video",
+          "name": "V1",
+          "order": 0,
+          "muted": false,
+          "solo": false,
+          "locked": false,
+          "hidden": false,
+          "items": [
+            {
+              "id": {
+                "value": "6e2ca320-a644-4ad9-aa6f-0ecd750ef2fc"
+              },
+              "kind": "clip",
+              "mediaAssetId": {
+                "value": "f754f559-e836-4043-8356-bf6b1a62db15"
+              },
+              "timelineStart": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "duration": {
+                "numerator": 15000000,
+                "denominator": 1000000
+              },
+              "sourceStart": {
+                "numerator": 5000000,
+                "denominator": 1000000
+              },
+              "sourceDuration": {
+                "numerator": 15000000,
+                "denominator": 1000000
+              },
+              "speed": 1,
+              "reversed": false,
+              "volume": 1,
+              "muted": false,
+              "transform": {
+                "positionX": 0,
+                "positionY": 0,
+                "scaleX": 0.8,
+                "scaleY": 0.8,
+                "rotationDegrees": 3,
+                "anchorX": 0,
+                "anchorY": 0
+              },
+              "opacity": 0.9,
+              "locked": false,
+              "textContent": null,
+              "fontFamily": null,
+              "fontSize": 48,
+              "fontBold": false,
+              "fontAlign": "center",
+              "fillColor": null,
+              "outlineColor": null,
+              "outlineWidth": 0,
+              "shadowColor": null,
+              "shadowOffsetX": 2,
+              "shadowOffsetY": 2,
+              "shadowBlur": 4,
+              "shadowOpacity": 0.5,
+              "fadeInDuration": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "fadeOutDuration": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "pan": 0,
+              "cropLeft": 0,
+              "cropTop": 0,
+              "cropRight": 0,
+              "cropBottom": 0,
+              "blendMode": "normal",
+              "masks": [],
+              "colorCorrection": {
+                "brightness": 0.08,
+                "contrast": 0.15,
+                "saturation": 1.2,
+                "exposure": 0,
+                "highlights": 0,
+                "shadows": 0,
+                "whites": 0,
+                "blacks": 0,
+                "tint": 0,
+                "blackAndWhite": false
+              },
+              "speedCurve": {
+                "constantSpeed": 1,
+                "preservePitch": true,
+                "segments": []
+              },
+              "stabilization": {
+                "enabled": false,
+                "strength": 0.5,
+                "cropZoomCompensation": true,
+                "analysisComplete": false
+              },
+              "effects": [
+                {
+                  "id": {
+                    "value": "56a8de96-9c8d-45e1-9327-ba876d162cc2"
+                  },
+                  "effectTypeId": "mono",
+                  "enabled": true,
+                  "parameters": {
+                    "intensity": 1
+                  }
+                }
+              ],
+              "animatedProperty": null,
+              "chromaKey": null,
+              "mediaIntelligenceSourceAssetId": null,
+              "sourceEnd": {
+                "numerator": 20000000,
+                "denominator": 1000000
+              },
+              "timelineEnd": {
+                "numerator": 15000000,
+                "denominator": 1000000
+              }
+            }
+          ]
+        },
+        {
+          "id": {
+            "value": "b48f22e0-33ff-4361-9799-7ec4c0c2b16b"
+          },
+          "kind": "text",
+          "name": "T1",
+          "order": 1,
+          "muted": false,
+          "solo": false,
+          "locked": false,
+          "hidden": false,
+          "items": [
+            {
+              "id": {
+                "value": "824c97a2-20e8-40be-9c03-ebe418310b0d"
+              },
+              "kind": "text",
+              "mediaAssetId": null,
+              "timelineStart": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "duration": {
+                "numerator": 5000000,
+                "denominator": 1000000
+              },
+              "sourceStart": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "sourceDuration": {
+                "numerator": 5000000,
+                "denominator": 1000000
+              },
+              "speed": 1,
+              "reversed": false,
+              "volume": 1,
+              "muted": false,
+              "transform": {
+                "positionX": 80,
+                "positionY": 120,
+                "scaleX": 1,
+                "scaleY": 1,
+                "rotationDegrees": 0,
+                "anchorX": 0,
+                "anchorY": 0
+              },
+              "opacity": 1,
+              "locked": false,
+              "textContent": "RUSHFRAME QA CAMPAIGN CUT",
+              "fontFamily": null,
+              "fontSize": 64,
+              "fontBold": false,
+              "fontAlign": "center",
+              "fillColor": "white",
+              "outlineColor": null,
+              "outlineWidth": 0,
+              "shadowColor": null,
+              "shadowOffsetX": 2,
+              "shadowOffsetY": 2,
+              "shadowBlur": 4,
+              "shadowOpacity": 0.5,
+              "fadeInDuration": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "fadeOutDuration": {
+                "numerator": 0,
+                "denominator": 1
+              },
+              "pan": 0,
+              "cropLeft": 0,
+              "cropTop": 0,
+              "cropRight": 0,
+              "cropBottom": 0,
+              "blendMode": "normal",
+              "masks": [],
+              "colorCorrection": null,
+              "speedCurve": null,
+              "stabilization": null,
+              "effects": [],
+              "animatedProperty": null,
+              "chromaKey": null,
+              "mediaIntelligenceSourceAssetId": null,
+              "sourceEnd": {
+                "numerator": 5000000,
+                "denominator": 1000000
+              },
+              "timelineEnd": {
+                "numerator": 5000000,
+                "denominator": 1000000
+              }
+            }
+          ]
+        }
+      ],
+      "markers": [
+        {
+          "id": {
+            "value": "15125a45-46d3-4036-82f4-87a925fbb2f2"
+          },
+          "label": "Marker 1",
+          "time": {
+            "numerator": 0,
+            "denominator": 1
+          },
+          "color": "#ffcc00",
+          "durationInFrames": 0,
+          "mediaIntelligenceSourceAssetId": null
+        }
+      ],
+      "transitions": [],
+      "duration": {
+        "numerator": 15000000,
+        "denominator": 1000000
+      }
+    }
+  ],
+  "mediaLibrary": [
+    {
+      "id": {
+        "value": "f754f559-e836-4043-8356-bf6b1a62db15"
+      },
+      "kind": "video",
+      "originalPath": "C:\\Users\\LENOVO\\Desktop\\Projectsss\\Rushframe\\samplevid.mp4",
+      "relativeProjectPath": "C:\\Users\\LENOVO\\Desktop\\Projectsss\\Rushframe\\samplevid.mp4",
+      "fileFingerprint": "",
+      "duration": {
+        "numerator": 0,
+        "denominator": 1
+      },
+      "isOffline": false
+    }
+  ],
+  "mediaIntelligence": [],
+  "campaignDescription": "Fast-paced vertical social campaign cut with a clear branded opening title.",
+  "tasks": [
+    {
+      "id": "7d9ac130-b8af-4e3e-a7bd-887226f17e94",
+      "title": "Review opening hook and title readability",
+      "isCompleted": true
+    }
+  ],
+  "mainSequence": {
+    "id": {
+      "value": "7976e0ec-7863-41d0-89e2-2d692fca58d2"
+    },
+    "name": "Main",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "tracks": [
+      {
+        "id": {
+          "value": "15dfcc9f-85ec-4c72-83c5-59ee79979cfc"
+        },
+        "kind": "video",
+        "name": "V1",
+        "order": 0,
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "hidden": false,
+        "items": [
+          {
+            "id": {
+              "value": "6e2ca320-a644-4ad9-aa6f-0ecd750ef2fc"
+            },
+            "kind": "clip",
+            "mediaAssetId": {
+              "value": "f754f559-e836-4043-8356-bf6b1a62db15"
+            },
+            "timelineStart": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "duration": {
+              "numerator": 15000000,
+              "denominator": 1000000
+            },
+            "sourceStart": {
+              "numerator": 5000000,
+              "denominator": 1000000
+            },
+            "sourceDuration": {
+              "numerator": 15000000,
+              "denominator": 1000000
+            },
+            "speed": 1,
+            "reversed": false,
+            "volume": 1,
+            "muted": false,
+            "transform": {
+              "positionX": 0,
+              "positionY": 0,
+              "scaleX": 0.8,
+              "scaleY": 0.8,
+              "rotationDegrees": 3,
+              "anchorX": 0,
+              "anchorY": 0
+            },
+            "opacity": 0.9,
+            "locked": false,
+            "textContent": null,
+            "fontFamily": null,
+            "fontSize": 48,
+            "fontBold": false,
+            "fontAlign": "center",
+            "fillColor": null,
+            "outlineColor": null,
+            "outlineWidth": 0,
+            "shadowColor": null,
+            "shadowOffsetX": 2,
+            "shadowOffsetY": 2,
+            "shadowBlur": 4,
+            "shadowOpacity": 0.5,
+            "fadeInDuration": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "fadeOutDuration": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "pan": 0,
+            "cropLeft": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "blendMode": "normal",
+            "masks": [],
+            "colorCorrection": {
+              "brightness": 0.08,
+              "contrast": 0.15,
+              "saturation": 1.2,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "tint": 0,
+              "blackAndWhite": false
+            },
+            "speedCurve": {
+              "constantSpeed": 1,
+              "preservePitch": true,
+              "segments": []
+            },
+            "stabilization": {
+              "enabled": false,
+              "strength": 0.5,
+              "cropZoomCompensation": true,
+              "analysisComplete": false
+            },
+            "effects": [
+              {
+                "id": {
+                  "value": "56a8de96-9c8d-45e1-9327-ba876d162cc2"
+                },
+                "effectTypeId": "mono",
+                "enabled": true,
+                "parameters": {
+                  "intensity": 1
+                }
+              }
+            ],
+            "animatedProperty": null,
+            "chromaKey": null,
+            "mediaIntelligenceSourceAssetId": null,
+            "sourceEnd": {
+              "numerator": 20000000,
+              "denominator": 1000000
+            },
+            "timelineEnd": {
+              "numerator": 15000000,
+              "denominator": 1000000
+            }
+          }
+        ]
+      },
+      {
+        "id": {
+          "value": "b48f22e0-33ff-4361-9799-7ec4c0c2b16b"
+        },
+        "kind": "text",
+        "name": "T1",
+        "order": 1,
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "hidden": false,
+        "items": [
+          {
+            "id": {
+              "value": "824c97a2-20e8-40be-9c03-ebe418310b0d"
+            },
+            "kind": "text",
+            "mediaAssetId": null,
+            "timelineStart": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "duration": {
+              "numerator": 5000000,
+              "denominator": 1000000
+            },
+            "sourceStart": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "sourceDuration": {
+              "numerator": 5000000,
+              "denominator": 1000000
+            },
+            "speed": 1,
+            "reversed": false,
+            "volume": 1,
+            "muted": false,
+            "transform": {
+              "positionX": 80,
+              "positionY": 120,
+              "scaleX": 1,
+              "scaleY": 1,
+              "rotationDegrees": 0,
+              "anchorX": 0,
+              "anchorY": 0
+            },
+            "opacity": 1,
+            "locked": false,
+            "textContent": "RUSHFRAME QA CAMPAIGN CUT",
+            "fontFamily": null,
+            "fontSize": 64,
+            "fontBold": false,
+            "fontAlign": "center",
+            "fillColor": "white",
+            "outlineColor": null,
+            "outlineWidth": 0,
+            "shadowColor": null,
+            "shadowOffsetX": 2,
+            "shadowOffsetY": 2,
+            "shadowBlur": 4,
+            "shadowOpacity": 0.5,
+            "fadeInDuration": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "fadeOutDuration": {
+              "numerator": 0,
+              "denominator": 1
+            },
+            "pan": 0,
+            "cropLeft": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "blendMode": "normal",
+            "masks": [],
+            "colorCorrection": null,
+            "speedCurve": null,
+            "stabilization": null,
+            "effects": [],
+            "animatedProperty": null,
+            "chromaKey": null,
+            "mediaIntelligenceSourceAssetId": null,
+            "sourceEnd": {
+              "numerator": 5000000,
+              "denominator": 1000000
+            },
+            "timelineEnd": {
+              "numerator": 5000000,
+              "denominator": 1000000
+            }
+          }
+        ]
+      }
+    ],
+    "markers": [
+      {
+        "id": {
+          "value": "15125a45-46d3-4036-82f4-87a925fbb2f2"
+        },
+        "label": "Marker 1",
+        "time": {
+          "numerator": 0,
+          "denominator": 1
+        },
+        "color": "#ffcc00",
+        "durationInFrames": 0,
+        "mediaIntelligenceSourceAssetId": null
+      }
+    ],
+    "transitions": [],
+    "duration": {
+      "numerator": 15000000,
+      "denominator": 1000000
+    }
+  }
+}

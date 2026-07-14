@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Rushframe.Domain\Rushframe.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Rushframe.Infrastructure\Rushframe.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Rushframe.Media.Native\Rushframe.Media.Native.csproj" />
   </ItemGroup>
 

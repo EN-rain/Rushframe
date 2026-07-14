@@ -10,6 +10,7 @@ from pathlib import Path
 from rushframe_intelligence.models import ANALYSIS_VERSION, AnalysisManifest
 
 _HASH_BLOCK_SIZE = 4 * 1024 * 1024
+_FAST_SAMPLE_SIZE = 1024 * 1024
 
 
 def source_checksum(path: Path | str) -> str:
@@ -19,6 +20,25 @@ def source_checksum(path: Path | str) -> str:
         while block := stream.read(_HASH_BLOCK_SIZE):
             digest.update(block)
     return f"sha256:{digest.hexdigest()}"
+
+
+def source_fast_fingerprint(path: Path | str) -> str:
+    source = Path(path)
+    stat = source.stat()
+    digest = hashlib.blake2b(digest_size=20)
+    digest.update(str(stat.st_size).encode("ascii"))
+    digest.update(str(stat.st_mtime_ns).encode("ascii"))
+    with source.open("rb") as stream:
+        offsets = {
+            0,
+            max(0, (stat.st_size // 2) - (_FAST_SAMPLE_SIZE // 2)),
+            max(0, stat.st_size - _FAST_SAMPLE_SIZE),
+        }
+        for offset in sorted(offsets):
+            stream.seek(offset)
+            digest.update(offset.to_bytes(8, "little", signed=False))
+            digest.update(stream.read(_FAST_SAMPLE_SIZE))
+    return f"blake2b-sampled:{digest.hexdigest()}"
 
 
 def create_manifest(
@@ -32,6 +52,7 @@ def create_manifest(
         source_checksum=checksum,
         source_size=stat.st_size,
         source_modified_utc=modified,
+        source_fast_fingerprint=source_fast_fingerprint(source),
         enabled_features=sorted(set(enabled_features)),
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
     )
@@ -46,6 +67,23 @@ def load_manifest(path: Path | str) -> AnalysisManifest | None:
         return AnalysisManifest(**payload)
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+def is_fast_cache_valid(
+    manifest: AnalysisManifest | None,
+    source: Path,
+    fast_fingerprint: str,
+    required_features: list[str],
+) -> bool:
+    if manifest is None or manifest.analysis_version != ANALYSIS_VERSION:
+        return False
+    stat = source.stat()
+    return (
+        bool(manifest.source_fast_fingerprint)
+        and manifest.source_fast_fingerprint == fast_fingerprint
+        and manifest.source_size == stat.st_size
+        and set(required_features).issubset(manifest.enabled_features)
+    )
 
 
 def is_cache_valid(

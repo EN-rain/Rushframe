@@ -16,11 +16,16 @@ public sealed class ApplyTransitionCommand : IEditCommand
 
     public EditResult Execute(Sequence sequence)
     {
+        if (Duration.Seconds <= 0)
+            return EditResult.Fail("Transition duration must be greater than zero");
+
         foreach (var track in sequence.Tracks)
         {
             var left = track.Items.FirstOrDefault(i => i.Id == LeftItemId);
             var right = track.Items.FirstOrDefault(i => i.Id == RightItemId);
             if (left == null || right == null) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (left.Locked || right.Locked) return EditResult.Fail("Item is locked");
 
             var overlap = left.TimelineEnd.Seconds - right.TimelineStart.Seconds;
             if (overlap > 0) return EditResult.Fail("Clips already overlap; cannot apply transition");

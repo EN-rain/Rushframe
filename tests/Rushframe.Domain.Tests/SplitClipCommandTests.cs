@@ -62,6 +62,25 @@ public sealed class SplitClipCommandTests
         Assert.Single(seq.Tracks[0].Items);
     }
 
+    [Fact]
+    public void split_rejects_locked_track()
+    {
+        var seq = MakeSequenceWithOneClip(out var trackId, out var itemId);
+        seq.Tracks[0].Locked = true;
+
+        var cmd = new Editing.SplitClipCommand
+        {
+            TrackId = trackId,
+            ItemId = itemId,
+            SplitTime = MediaTime.FromSeconds(5),
+        };
+
+        var result = cmd.Execute(seq);
+
+        Assert.False(result.Success);
+        Assert.Single(seq.Tracks[0].Items);
+    }
+
     private static Sequence MakeSequenceWithOneClip(out TrackId trackId, out TimelineItemId itemId)
     {
         var seq = new Sequence();

@@ -1,24 +1,53 @@
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Rushframe.Desktop.Services;
 using Rushframe.Desktop.Viewport;
 using Rushframe.Domain;
 
 namespace Rushframe.Desktop.Timeline;
 
-public sealed class TimelineControl : FrameworkElement
+public sealed partial class TimelineControl : FrameworkElement
 {
+    private static readonly SolidColorBrush BackgroundBrush = Freeze(new SolidColorBrush(Color.FromRgb(10, 7, 16)));
+    private static readonly SolidColorBrush HeaderBackgroundBrush = Freeze(new SolidColorBrush(Color.FromRgb(13, 9, 21)));
+    private static readonly SolidColorBrush RulerBackgroundBrush = Freeze(new SolidColorBrush(Color.FromRgb(17, 12, 26)));
+    private static readonly SolidColorBrush BorderBrush = Freeze(new SolidColorBrush(Color.FromRgb(53, 42, 73)));
+    private static readonly SolidColorBrush RulerTextBrush = Freeze(new SolidColorBrush(Color.FromRgb(153, 137, 174)));
+    private static readonly Pen BorderPen = Freeze(new Pen(BorderBrush, 0.75));
+    private static readonly Pen RulerGridPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(70, 89, 69, 114)), 0.6));
+    private static readonly Pen TrackBorderPen = Freeze(new Pen(new SolidColorBrush(Color.FromRgb(45, 35, 61)), 0.6));
+    private static readonly Pen SelectedClipBorderPen = Freeze(new Pen(new SolidColorBrush(Color.FromRgb(179, 139, 255)), 1.8));
+    private static readonly Pen ClipBorderPen = Freeze(new Pen(new SolidColorBrush(Color.FromRgb(74, 55, 104)), 0.8));
+    private static readonly Pen ClipHighlightPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(105, 220, 205, 255)), 0.7));
+    private static readonly Pen WaveformPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(175, 190, 164, 255)), 0.75));
+    private static readonly Pen AnimationLanePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(120, 235, 220, 255)), 0.75));
+    private static readonly Pen FadePen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 255, 255)), 1));
+    private static readonly SolidColorBrush AnimationKeyBrush = Freeze(new SolidColorBrush(Color.FromRgb(226, 202, 255)));
+    private static readonly SolidColorBrush TrackEvenBrush = Freeze(new SolidColorBrush(Color.FromRgb(17, 12, 26)));
+    private static readonly SolidColorBrush TrackOddBrush = Freeze(new SolidColorBrush(Color.FromRgb(13, 9, 21)));
+    private static readonly Typeface RulerTypeface = new("Cascadia Mono");
+    private static readonly Typeface UiTypeface = new("Segoe UI");
+    private static readonly Dictionary<(ItemKind Kind, bool Audio), Brush> ClipBrushes = BuildClipBrushes();
+
     private readonly TimelineViewport _viewport = new();
+    private readonly TimelineSceneIndex _sceneIndex = new();
+    private readonly Dictionary<WaveformDrawingKey, DrawingImage> _waveformDrawingCache = [];
+    private readonly EditorPerformanceTelemetry _telemetry = EditorPerformanceTelemetry.Shared;
 
     public Sequence? Sequence
     {
         get => _sequence;
         set
         {
+            if (ReferenceEquals(_sequence, value)) return;
             _sequence = value;
+            _sceneIndex.Invalidate();
             ClearSelection();
             InvalidateVisual();
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -32,6 +61,7 @@ public sealed class TimelineControl : FrameworkElement
     private MediaTime _dragStartTime;
     private MediaTime _dragOrigDuration;
     private MediaTime _dragOrigSourceStart;
+    private double _dragOrigVolume;
     private double _dragOriginMouseX;
     private DragMode _dragMode;
     private MediaTime _playheadTime;
@@ -39,15 +69,44 @@ public sealed class TimelineControl : FrameworkElement
     private Transition? _selectedTransition;
     private int _selectedTrackIndex;
     private bool _dragFromPlayhead;
+    private long _projectRevision;
 
-    private enum DragMode { None, Move, TrimLeft, TrimRight }
+    private enum DragMode { None, Move, TrimLeft, TrimRight, Volume }
 
-    public MediaTime PlayheadTime { get => _playheadTime; set { _playheadTime = value; InvalidateVisual(); } }
+    public MediaTime PlayheadTime
+    {
+        get => _playheadTime;
+        set
+        {
+            if (_playheadTime == value) return;
+            _playheadTime = value;
+            PlayheadVisualChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+    public long ProjectRevision
+    {
+        get => _projectRevision;
+        set
+        {
+            if (_projectRevision == value) return;
+            _projectRevision = value;
+            _sceneIndex.Invalidate();
+            InvalidateVisual();
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+    public double PlayheadPixelX => _viewport.TimeToPixel(_playheadTime);
+    public double TrackHeaderWidth => _viewport.TrackHeaderWidth;
+    public double RulerHeight => _viewport.RulerHeight;
+    public double VisibleStartSeconds => _viewport.TimeAtLeftEdgeSeconds;
+    public double VisibleEndSeconds => _viewport.TimeAtLeftEdgeSeconds + _viewport.VisibleDurationSeconds;
     public TimelineItem? SelectedItem => _selectedItem;
+    public IReadOnlyList<TimelineItem> SelectedItems => ResolveSelectedItems();
     public Transition? SelectedTransition => _selectedTransition;
     public int SelectedTrackIndex => _selectedTrackIndex;
     public bool SnapEnabled { get; set; } = true;
     public Func<MediaAssetId, string?>? AssetNameResolver { get; set; }
+    public Func<MediaAssetId, IReadOnlyList<float>?>? AssetWaveformResolver { get; set; }
     public ContextMenu? ClipContextMenu { get; set; }
     public ContextMenu? TrackHeaderContextMenu { get; set; }
 
@@ -55,11 +114,18 @@ public sealed class TimelineControl : FrameworkElement
     public event EventHandler<TransitionSelection?>? TransitionSelected;
     public event EventHandler? PlayheadMoved;
     public event EventHandler? PlayPauseRequested;
+    public event EventHandler<Marker>? MarkerEditRequested;
     public event EventHandler<int>? TrackHeaderContextRequested;
     public event EventHandler? DeleteSelectedClipRequested;
     public event EventHandler<ClipMoveRequestedEventArgs>? ClipMoveRequested;
     public event EventHandler<ClipTrimRequestedEventArgs>? ClipTrimRequested;
+    public event EventHandler<ClipVolumeRequestedEventArgs>? ClipVolumeRequested;
+    public event EventHandler<GroupMoveRequestedEventArgs>? GroupMoveRequested;
+    public event EventHandler<GroupTrimRequestedEventArgs>? GroupTrimRequested;
+    public event EventHandler<IReadOnlyList<TimelineItem>>? SelectionChanged;
     public event EventHandler<double>? ZoomScaleChanged;
+    public event EventHandler? PlayheadVisualChanged;
+    public event EventHandler? ViewportChanged;
 
     private const double TrimEdgeThreshold = 8;
 
@@ -74,7 +140,7 @@ public sealed class TimelineControl : FrameworkElement
         SnapsToDevicePixels = true;
         _viewport.TrackHeaderWidth = 190;
         _viewport.TrackHeight = 46;
-        _viewport.RulerHeight = 34;
+        _viewport.RulerHeight = 48;
     }
 
     public void ClearSelection()
@@ -82,6 +148,8 @@ public sealed class TimelineControl : FrameworkElement
         var hadClip = _selectedItem != null;
         var hadTransition = _selectedTransition != null;
         _selectedItem = null;
+        _selectedItemIds.Clear();
+        _groupDragSnapshots.Clear();
         _selectedTransition = null;
         _selectedTrackIndex = -1;
         _dragItem = null;
@@ -104,6 +172,7 @@ public sealed class TimelineControl : FrameworkElement
                 0,
                 _viewport.GetMaxHorizontalOffset());
             InvalidateVisual();
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -114,6 +183,7 @@ public sealed class TimelineControl : FrameworkElement
             0,
             _viewport.GetMaxHorizontalOffset());
         InvalidateVisual();
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void SetZoomScale(double scale)
@@ -121,11 +191,23 @@ public sealed class TimelineControl : FrameworkElement
         SyncViewportSize();
         _viewport.SetZoomScale(scale, Math.Max(_viewport.TrackHeaderWidth, RenderSize.Width / 2));
         InvalidateVisual();
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void SelectItem(TimelineItem? item, int trackIndex)
+    {
+        _selectedItem = item;
+        _selectedItemIds.Clear();
+        if (item != null) _selectedItemIds.Add(item.Id);
+        _selectedTransition = null;
+        _selectedTrackIndex = item == null ? -1 : trackIndex;
+        InvalidateVisual();
     }
 
     public void SelectTransition(Transition? transition, int trackIndex)
     {
         _selectedItem = null;
+        _selectedItemIds.Clear();
         _selectedTransition = transition;
         _selectedTrackIndex = trackIndex;
         InvalidateVisual();
@@ -133,10 +215,11 @@ public sealed class TimelineControl : FrameworkElement
 
     protected override void OnRender(DrawingContext dc)
     {
+        using var measurement = _telemetry.MeasureTimelineRender();
         SyncViewportSize();
         DrawBackground(dc);
         if (Sequence == null) return;
-        UpdateSequenceDuration();
+        EnsureSceneIndex();
 
         DrawRuler(dc);
         DrawTrackHeaders(dc);
@@ -145,38 +228,33 @@ public sealed class TimelineControl : FrameworkElement
         if (contentClip.Width > 0 && contentClip.Height > 0)
         {
             dc.PushClip(new RectangleGeometry(contentClip));
-            for (int i = 0; i < Sequence.Tracks.Count; i++)
-                DrawTrack(dc, Sequence.Tracks[i], i);
+            var firstTrack = Math.Max(0, _viewport.YToTrackIndex(_viewport.RulerHeight));
+            var lastTrack = Math.Min(Sequence.Tracks.Count - 1, _viewport.YToTrackIndex(RenderSize.Height) + 1);
+            for (var index = firstTrack; index <= lastTrack; index++)
+                DrawTrack(dc, Sequence.Tracks[index], index);
 
             DrawTransitionHandles(dc);
             DrawMarkers(dc);
             DrawDraggedClipGhost(dc);
-            DrawPlayhead(dc);
+            DrawActiveSnapGuide(dc);
+            DrawSelectionBox(dc);
             dc.Pop();
         }
     }
 
-    private void UpdateSequenceDuration()
+    private void EnsureSceneIndex()
     {
-        double max = 0;
-        if (Sequence != null)
-        {
-            foreach (var track in Sequence.Tracks)
-            foreach (var item in track.Items)
-            {
-                var end = item.TimelineStart.Seconds + item.Duration.Seconds;
-                if (end > max) max = end;
-            }
-        }
-        _viewport.SequenceDurationSeconds = Math.Max(max + 10, 60);
-        _viewport.TrackCount = Sequence?.Tracks.Count ?? 0;
+        if (Sequence == null) return;
+        _sceneIndex.Ensure(Sequence, _projectRevision);
+        _viewport.SequenceDurationSeconds = _sceneIndex.DurationSeconds;
+        _viewport.TrackCount = _sceneIndex.TrackCount;
         _viewport.HorizontalOffset = Math.Clamp(_viewport.HorizontalOffset, 0, _viewport.GetMaxHorizontalOffset());
         _viewport.VerticalOffset = Math.Clamp(_viewport.VerticalOffset, 0, _viewport.GetMaxVerticalOffset());
     }
 
     private void DrawBackground(DrawingContext dc)
     {
-        dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(12, 13, 18)), null, new Rect(RenderSize));
+        dc.DrawRectangle(BackgroundBrush, null, new Rect(RenderSize));
     }
 
     private void DrawRuler(DrawingContext dc)
@@ -184,9 +262,8 @@ public sealed class TimelineControl : FrameworkElement
         var headerRect = new Rect(0, 0, _viewport.TrackHeaderWidth, _viewport.RulerHeight);
         var rulerRect = new Rect(_viewport.TrackHeaderWidth, 0,
             Math.Max(0, RenderSize.Width - _viewport.TrackHeaderWidth), _viewport.RulerHeight);
-        var borderPen = new Pen(new SolidColorBrush(Color.FromRgb(38, 40, 50)), 0.75);
-        dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(13, 15, 21)), borderPen, headerRect);
-        dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(15, 17, 23)), borderPen, rulerRect);
+        dc.DrawRectangle(HeaderBackgroundBrush, BorderPen, headerRect);
+        dc.DrawRectangle(RulerBackgroundBrush, BorderPen, rulerRect);
 
         var step = Math.Max(1, (int)Math.Ceiling(90 / Math.Max(1, _viewport.PixelsPerSecond)));
         var startSec = (int)_viewport.TimeAtLeftEdgeSeconds;
@@ -201,22 +278,18 @@ public sealed class TimelineControl : FrameworkElement
             var x = _viewport.TimeToPixel(MediaTime.FromSeconds(s));
             if (x < _viewport.TrackHeaderWidth || x > RenderSize.Width) continue;
 
-            var labelWouldCollideWithPlayhead = Math.Abs(s - _playheadTime.Seconds) < 0.05;
-            if (!labelWouldCollideWithPlayhead)
-            {
-                var ft = new FormattedText(
-                    FormatRulerTime(s),
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight,
-                    new Typeface("Cascadia Mono"),
-                    9,
-                    new SolidColorBrush(Color.FromRgb(128, 124, 139)),
-                    1.25);
-                dc.DrawText(ft, new Point(x + 5, 9));
-            }
+            var ft = new FormattedText(
+                FormatRulerTime(s),
+                System.Globalization.CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                RulerTypeface,
+                9,
+                RulerTextBrush,
+                1.25);
+            dc.DrawText(ft, new Point(x + 5, 18));
 
             dc.DrawLine(
-                new Pen(new SolidColorBrush(Color.FromArgb(70, 90, 86, 103)), 0.6),
+                RulerGridPen,
                 new Point(x, _viewport.RulerHeight - 8),
                 new Point(x, RenderSize.Height));
         }
@@ -233,7 +306,10 @@ public sealed class TimelineControl : FrameworkElement
 
     private void DrawTrackHeaders(DrawingContext dc)
     {
-        for (int i = 0; i < (Sequence?.Tracks.Count ?? 0); i++)
+        var trackCount = Sequence?.Tracks.Count ?? 0;
+        var firstTrack = Math.Max(0, _viewport.YToTrackIndex(_viewport.RulerHeight));
+        var lastTrack = Math.Min(trackCount - 1, _viewport.YToTrackIndex(RenderSize.Height) + 1);
+        for (var i = firstTrack; i <= lastTrack; i++)
         {
             var track = Sequence!.Tracks[i];
             var y = _viewport.TrackIndexToY(i);
@@ -241,8 +317,8 @@ public sealed class TimelineControl : FrameworkElement
             var selected = i == _selectedTrackIndex;
             var background = selected
                 ? Color.FromRgb(25, 21, 38)
-                : i % 2 == 0 ? Color.FromRgb(17, 19, 26) : Color.FromRgb(15, 17, 23);
-            dc.DrawRectangle(new SolidColorBrush(background), new Pen(new SolidColorBrush(Color.FromRgb(37, 39, 49)), 0.65), rect);
+                : i % 2 == 0 ? Color.FromRgb(19, 15, 29) : Color.FromRgb(16, 12, 25);
+            dc.DrawRectangle(new SolidColorBrush(background), new Pen(new SolidColorBrush(Color.FromRgb(53, 42, 73)), 0.65), rect);
 
             var code = GetTrackCode(track, i);
             var badgeRect = new Rect(10, y + 10, 34, 25);
@@ -308,13 +384,15 @@ public sealed class TimelineControl : FrameworkElement
         var yBase = _viewport.TrackIndexToY(trackIndex);
         var trackRect = new Rect(_viewport.TrackHeaderWidth, yBase,
             Math.Max(0, RenderSize.Width - _viewport.TrackHeaderWidth), _viewport.TrackHeight);
-        var trackBackground = trackIndex % 2 == 0
-            ? Color.FromRgb(13, 15, 21)
-            : Color.FromRgb(11, 13, 18);
-        dc.DrawRectangle(new SolidColorBrush(trackBackground), new Pen(new SolidColorBrush(Color.FromRgb(34, 36, 45)), 0.6), trackRect);
+        var trackBackground = trackIndex % 2 == 0 ? TrackEvenBrush : TrackOddBrush;
+        dc.DrawRectangle(trackBackground, TrackBorderPen, trackRect);
 
-        foreach (var item in track.Items)
+        var items = _sceneIndex.GetTrackItems(trackIndex);
+        var firstItem = _sceneIndex.FindFirstPotentiallyVisibleItem(trackIndex, VisibleStartSeconds);
+        for (var itemIndex = firstItem; itemIndex < items.Count; itemIndex++)
         {
+            var item = items[itemIndex];
+            if (item.TimelineStart.Seconds > VisibleEndSeconds) break;
             if (_isDraggingClip && _dragItem?.Id == item.Id && trackIndex != _dragTrackIndex)
                 continue;
 
@@ -323,21 +401,25 @@ public sealed class TimelineControl : FrameworkElement
             if (x + width < _viewport.TrackHeaderWidth || x > RenderSize.Width) continue;
 
             var rect = new Rect(x + 1, yBase + 4, Math.Max(2, width - 2), _viewport.TrackHeight - 8);
-            var isSelected = _selectedItem != null && _selectedItem.Id == item.Id;
+            var isSelected = IsItemSelected(item);
             var isAudioTrack = track.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice;
             var fill = CreateClipBrush(item.Kind, isAudioTrack);
-            var border = isSelected
-                ? new Pen(new SolidColorBrush(Color.FromRgb(179, 139, 255)), 1.8)
-                : new Pen(new SolidColorBrush(Color.FromRgb(74, 55, 104)), 0.8);
+            var border = isSelected ? SelectedClipBorderPen : ClipBorderPen;
             dc.DrawRoundedRectangle(fill, border, rect, 4, 4);
 
             dc.DrawLine(
-                new Pen(new SolidColorBrush(Color.FromArgb(105, 220, 205, 255)), 0.7),
+                ClipHighlightPen,
                 new Point(rect.X + 4, rect.Y + 1),
                 new Point(rect.Right - 4, rect.Y + 1));
 
             if (isAudioTrack && rect.Width > 18)
-                DrawAudioWaveform(dc, rect, trackIndex);
+            {
+                var peaks = item.MediaAssetId is { } waveformAssetId
+                    ? AssetWaveformResolver?.Invoke(waveformAssetId)
+                    : null;
+                DrawAudioWaveform(dc, rect, peaks, trackIndex);
+                DrawAudioVolumeLine(dc, rect, item.Volume, isSelected);
+            }
 
             if (rect.Width > 34)
             {
@@ -368,46 +450,56 @@ public sealed class TimelineControl : FrameworkElement
                 dc.Pop();
             }
 
+            if (isSelected && item.AnimationChannels.Count > 0 && rect.Width > 40)
+                DrawAnimationLanes(dc, rect, item);
+
             if (item.FadeInDuration.Seconds > 0)
             {
                 var fadeWidth = Math.Min(_viewport.GetClipWidth(item.FadeInDuration), rect.Width);
-                dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 255, 255)), 1),
+                dc.DrawLine(FadePen,
                     new Point(rect.X, rect.Bottom - 2), new Point(rect.X + fadeWidth, rect.Y + 2));
             }
             if (item.FadeOutDuration.Seconds > 0)
             {
                 var fadeWidth = Math.Min(_viewport.GetClipWidth(item.FadeOutDuration), rect.Width);
-                dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 255, 255)), 1),
+                dc.DrawLine(FadePen,
                     new Point(rect.Right - fadeWidth, rect.Y + 2), new Point(rect.Right, rect.Bottom - 2));
             }
         }
     }
 
-    private static Brush CreateClipBrush(ItemKind kind, bool audioTrack)
+    private void DrawAnimationLanes(DrawingContext dc, Rect rect, TimelineItem item)
     {
-        Color start;
-        Color end;
-        if (audioTrack)
+        var channelCount = Math.Min(3, item.AnimationChannels.Count);
+        if (channelCount == 0) return;
+        var laneHeight = Math.Min(7, Math.Max(4, (rect.Height - 8) / channelCount));
+        var startY = rect.Bottom - laneHeight * channelCount - 3;
+        for (var laneIndex = 0; laneIndex < channelCount; laneIndex++)
         {
-            start = Color.FromRgb(19, 82, 59);
-            end = Color.FromRgb(12, 48, 39);
-        }
-        else
-        {
-            (start, end) = kind switch
+            var y = startY + laneIndex * laneHeight + laneHeight / 2;
+            dc.DrawLine(AnimationLanePen, new Point(rect.X + 4, y), new Point(rect.Right - 4, y));
+            foreach (var keyframe in item.AnimationChannels[laneIndex].Keyframes)
             {
-                ItemKind.Text => (Color.FromRgb(113, 52, 166), Color.FromRgb(71, 34, 111)),
-                ItemKind.Image => (Color.FromRgb(46, 101, 105), Color.FromRgb(28, 62, 71)),
-                ItemKind.Sticker => (Color.FromRgb(135, 94, 39), Color.FromRgb(82, 57, 26)),
-                ItemKind.AdjustmentLayer => (Color.FromRgb(83, 62, 119), Color.FromRgb(48, 38, 69)),
-                _ => (Color.FromRgb(65, 43, 105), Color.FromRgb(35, 27, 59)),
-            };
+                var x = _viewport.TimeToPixel(item.TimelineStart.Add(keyframe.Time));
+                if (x < rect.X + 2 || x > rect.Right - 2) continue;
+                var diamond = new StreamGeometry();
+                using (var context = diamond.Open())
+                {
+                    context.BeginFigure(new Point(x, y - 3), true, true);
+                    context.LineTo(new Point(x + 3, y), true, false);
+                    context.LineTo(new Point(x, y + 3), true, false);
+                    context.LineTo(new Point(x - 3, y), true, false);
+                }
+                diamond.Freeze();
+                dc.DrawGeometry(AnimationKeyBrush, null, diamond);
+            }
         }
-
-        var brush = new LinearGradientBrush(start, end, 0);
-        brush.Freeze();
-        return brush;
     }
+
+    private static Brush CreateClipBrush(ItemKind kind, bool audioTrack) =>
+        ClipBrushes.TryGetValue((kind, audioTrack), out var brush)
+            ? brush
+            : ClipBrushes[(ItemKind.Clip, false)];
 
     private string ResolveClipLabel(TimelineItem item)
     {
@@ -418,19 +510,77 @@ public sealed class TimelineControl : FrameworkElement
         return item.Kind.ToString();
     }
 
-    private static void DrawAudioWaveform(DrawingContext dc, Rect rect, int seed)
+    private void DrawAudioWaveform(
+        DrawingContext dc,
+        Rect rect,
+        IReadOnlyList<float>? peaks,
+        int fallbackSeed)
     {
-        var pen = new Pen(new SolidColorBrush(Color.FromArgb(145, 81, 196, 127)), 0.75);
-        var center = rect.Y + rect.Height * 0.66;
-        var usableWidth = Math.Max(0, rect.Width - 8);
-        var samples = Math.Min(90, Math.Max(8, (int)(usableWidth / 4)));
-        for (var i = 0; i < samples; i++)
+        var key = new WaveformDrawingKey(
+            peaks == null ? 0 : RuntimeHelpers.GetHashCode(peaks),
+            peaks?.Count ?? 0,
+            fallbackSeed);
+        if (!_waveformDrawingCache.TryGetValue(key, out var drawing))
         {
-            var progress = samples <= 1 ? 0 : i / (double)(samples - 1);
-            var x = rect.X + 4 + progress * usableWidth;
-            var amplitude = (0.18 + 0.72 * Math.Abs(Math.Sin((i + seed * 3) * 0.63))) * rect.Height * 0.22;
-            dc.DrawLine(pen, new Point(x, center - amplitude), new Point(x, center + amplitude));
+            drawing = BuildWaveformDrawing(peaks, fallbackSeed);
+            if (_waveformDrawingCache.Count >= 512) _waveformDrawingCache.Clear();
+            _waveformDrawingCache[key] = drawing;
         }
+
+        dc.DrawImage(
+            drawing,
+            new Rect(rect.X + 4, rect.Y, Math.Max(1, rect.Width - 8), rect.Height));
+    }
+
+    private static DrawingImage BuildWaveformDrawing(IReadOnlyList<float>? peaks, int fallbackSeed)
+    {
+        const int samples = 180;
+        const double width = 180;
+        const double height = 100;
+        const double center = height * 0.58;
+        var group = new DrawingGroup();
+        using (var context = group.Open())
+        {
+            for (var index = 0; index < samples; index++)
+            {
+                var progress = index / (double)(samples - 1);
+                var x = progress * width;
+                var amplitudeValue = peaks is { Count: > 0 }
+                    ? peaks[Math.Clamp((int)Math.Round(progress * (peaks.Count - 1)), 0, peaks.Count - 1)]
+                    : (float)(0.18 + 0.72 * Math.Abs(Math.Sin((index + fallbackSeed * 3) * 0.63)));
+                var amplitude = Math.Clamp(amplitudeValue, 0, 1) * height * 0.34;
+                context.DrawLine(WaveformPen, new Point(x, center - amplitude), new Point(x, center + amplitude));
+            }
+        }
+        group.Freeze();
+        var image = new DrawingImage(group);
+        image.Freeze();
+        return image;
+    }
+
+    private static void DrawAudioVolumeLine(DrawingContext dc, Rect rect, double gain, bool selected)
+    {
+        var y = GainToVolumeLineY(rect, gain);
+        var pen = new Pen(
+            new SolidColorBrush(selected ? Color.FromRgb(236, 210, 255) : Color.FromArgb(190, 198, 174, 255)),
+            selected ? 1.6 : 1.0);
+        dc.DrawLine(pen, new Point(rect.X + 3, y), new Point(rect.Right - 3, y));
+        if (selected)
+            dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(222, 193, 255)), null, new Point(rect.Right - 8, y), 3, 3);
+    }
+
+    private static double GainToVolumeLineY(Rect rect, double gain)
+    {
+        var db = gain <= 0.00001 ? -60 : 20 * Math.Log10(gain);
+        var normalized = Math.Clamp((db + 60) / 66, 0, 1);
+        return rect.Bottom - 4 - (normalized * Math.Max(1, rect.Height - 8));
+    }
+
+    private static double VolumeLineYToGain(Rect rect, double y)
+    {
+        var normalized = Math.Clamp((rect.Bottom - 4 - y) / Math.Max(1, rect.Height - 8), 0, 1);
+        var db = -60 + (normalized * 66);
+        return db <= -59.9 ? 0 : Math.Pow(10, db / 20);
     }
 
     private void DrawTransitionHandles(DrawingContext dc)
@@ -449,12 +599,12 @@ public sealed class TimelineControl : FrameworkElement
                 && _selectedTransition.RightItemId == selection.RightItem.Id;
             var existing = selection.Transition != null;
             var fill = selected
-                ? new SolidColorBrush(Color.FromRgb(242, 184, 75))
+                ? new SolidColorBrush(Color.FromRgb(167, 139, 250))
                 : existing
                     ? new SolidColorBrush(Color.FromRgb(139, 92, 246))
                     : new SolidColorBrush(Color.FromRgb(22, 23, 32));
             var stroke = selected
-                ? new Pen(new SolidColorBrush(Color.FromRgb(255, 225, 150)), 2)
+                ? new Pen(new SolidColorBrush(Color.FromRgb(216, 200, 255)), 2)
                 : new Pen(new SolidColorBrush(existing ? Color.FromRgb(180, 150, 255) : Color.FromRgb(91, 87, 105)), 1.25);
 
             var diamond = new StreamGeometry();
@@ -484,20 +634,27 @@ public sealed class TimelineControl : FrameworkElement
     {
         if (Sequence == null) return;
 
-        var markerBrush = new SolidColorBrush(Color.FromRgb(242, 184, 75));
-        var markerPen = new Pen(markerBrush, 1);
         foreach (var marker in Sequence.Markers)
         {
+            var markerBrush = ParseTimelineBrush(marker.Color, Color.FromRgb(167, 139, 250));
+            var markerPen = new Pen(markerBrush, 1);
             var x = _viewport.TimeToPixel(marker.Time);
             if (x < _viewport.TrackHeaderWidth || x > RenderSize.Width) continue;
 
+            if (marker.Duration.Seconds > 0)
+            {
+                var endX = _viewport.TimeToPixel(marker.Time.Add(marker.Duration));
+                var durationRect = new Rect(x, 1, Math.Max(2, endX - x), Math.Max(5, _viewport.RulerHeight - 3));
+                var durationBrush = new SolidColorBrush(Color.FromArgb(45, markerBrush.Color.R, markerBrush.Color.G, markerBrush.Color.B));
+                dc.DrawRoundedRectangle(durationBrush, null, durationRect, 2, 2);
+            }
             dc.DrawLine(markerPen, new Point(x, _viewport.RulerHeight - 6), new Point(x, RenderSize.Height));
             var triangle = new StreamGeometry();
             using (var context = triangle.Open())
             {
-                context.BeginFigure(new Point(x - 5, 0), true, true);
-                context.LineTo(new Point(x + 5, 0), true, false);
-                context.LineTo(new Point(x, 7), true, false);
+                context.BeginFigure(new Point(x - 5, 30), true, true);
+                context.LineTo(new Point(x + 5, 30), true, false);
+                context.LineTo(new Point(x, 37), true, false);
             }
             triangle.Freeze();
             dc.DrawGeometry(markerBrush, null, triangle);
@@ -512,9 +669,22 @@ public sealed class TimelineControl : FrameworkElement
                     9,
                     markerBrush,
                     1.25);
-                dc.DrawText(label, new Point(x + 5, 10));
+                dc.DrawText(label, new Point(x + 7, 31));
             }
         }
+    }
+
+    private static SolidColorBrush ParseTimelineBrush(string? value, Color fallback)
+    {
+        try
+        {
+            if (ColorConverter.ConvertFromString(value) is Color color)
+                return new SolidColorBrush(color);
+        }
+        catch (FormatException)
+        {
+        }
+        return new SolidColorBrush(fallback);
     }
 
     private void DrawDraggedClipGhost(DrawingContext dc)
@@ -549,6 +719,7 @@ public sealed class TimelineControl : FrameworkElement
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
+        using var measurement = _telemetry.DetailedEnabled ? _telemetry.MeasureUiInput("timeline.wheel") : null;
         SyncViewportSize();
         if (Sequence == null) return;
 
@@ -557,6 +728,7 @@ public sealed class TimelineControl : FrameworkElement
         {
             _viewport.Pan(0, e.Delta);
             InvalidateVisual();
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
             return;
         }
@@ -565,11 +737,13 @@ public sealed class TimelineControl : FrameworkElement
         _viewport.Zoom(factor, e.GetPosition(this).X);
         ZoomScaleChanged?.Invoke(this, _viewport.ZoomScale);
         InvalidateVisual();
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
         e.Handled = true;
     }
 
     protected override void OnMouseDown(MouseButtonEventArgs e)
     {
+        using var measurement = _telemetry.DetailedEnabled ? _telemetry.MeasureUiInput("timeline.mouse_down") : null;
         Focus();
         var pos = e.GetPosition(this);
         _lastMousePos = pos;
@@ -582,6 +756,7 @@ public sealed class TimelineControl : FrameworkElement
             if (headerTrackIndex >= 0)
             {
                 _selectedItem = null;
+                _selectedItemIds.Clear();
                 _selectedTransition = null;
                 _selectedTrackIndex = headerTrackIndex;
                 ClipSelected?.Invoke(this, null);
@@ -597,6 +772,7 @@ public sealed class TimelineControl : FrameworkElement
             if (contextTransition != null)
             {
                 _selectedItem = null;
+                _selectedItemIds.Clear();
                 _selectedTrackIndex = contextTransition.TrackIndex;
                 _selectedTransition = contextTransition.Transition;
                 TransitionSelected?.Invoke(this, contextTransition);
@@ -608,6 +784,8 @@ public sealed class TimelineControl : FrameworkElement
             }
 
             var (contextItem, contextTrackIndex, _) = HitTest(pos);
+            _selectedItemIds.Clear();
+            if (contextItem != null) _selectedItemIds.Add(contextItem.Id);
             _selectedItem = contextItem;
             _selectedTransition = null;
             _selectedTrackIndex = contextTrackIndex;
@@ -631,11 +809,35 @@ public sealed class TimelineControl : FrameworkElement
         if (e.ChangedButton != MouseButton.Left) return;
 
         CaptureMouse();
+        var clickedMarker = pos.X > _viewport.TrackHeaderWidth ? HitTestMarker(pos.X) : null;
+        if (clickedMarker != null && pos.Y >= _viewport.RulerHeight)
+        {
+            if (e.ClickCount >= 2)
+            {
+                ReleaseMouseCapture();
+                MarkerEditRequested?.Invoke(this, clickedMarker);
+                e.Handled = true;
+                return;
+            }
+
+            SeekToMarker(clickedMarker);
+            e.Handled = true;
+            return;
+        }
+
         if (pos.Y < _viewport.RulerHeight && pos.X > _viewport.TrackHeaderWidth)
         {
-            _playheadTime = HitTestMarker(pos.X)?.Time ?? _viewport.PixelToTime(ClampContentX(pos.X));
+            if (e.ClickCount >= 2 && clickedMarker != null)
+            {
+                ReleaseMouseCapture();
+                MarkerEditRequested?.Invoke(this, clickedMarker);
+                e.Handled = true;
+                return;
+            }
+            PlayheadTime = clickedMarker?.Time ?? _viewport.PixelToTime(ClampContentX(pos.X));
             _dragFromPlayhead = true;
             _selectedItem = null;
+            _selectedItemIds.Clear();
             _selectedTransition = null;
             _selectedTrackIndex = -1;
             ClipSelected?.Invoke(this, null);
@@ -650,6 +852,7 @@ public sealed class TimelineControl : FrameworkElement
         if (transition != null)
         {
             _selectedItem = null;
+            _selectedItemIds.Clear();
             _selectedTransition = transition.Transition;
             _selectedTrackIndex = transition.TrackIndex;
             ClipSelected?.Invoke(this, null);
@@ -662,14 +865,24 @@ public sealed class TimelineControl : FrameworkElement
         var (item, trackIdx, _) = HitTest(pos);
         if (item == null)
         {
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
+                || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+            {
+                BeginBoxSelection(pos);
+                e.Handled = true;
+                return;
+            }
+
             _selectedItem = null;
+            _selectedItemIds.Clear();
+            SelectionChanged?.Invoke(this, []);
             _selectedTransition = null;
             _selectedTrackIndex = -1;
             ClipSelected?.Invoke(this, null);
             TransitionSelected?.Invoke(this, null);
             if (pos.X > _viewport.TrackHeaderWidth)
             {
-                _playheadTime = _viewport.PixelToTime(ClampContentX(pos.X));
+                PlayheadTime = _viewport.PixelToTime(ClampContentX(pos.X));
                 PlayheadMoved?.Invoke(this, EventArgs.Empty);
             }
             InvalidateVisual();
@@ -677,12 +890,14 @@ public sealed class TimelineControl : FrameworkElement
             return;
         }
 
-        _selectedItem = item;
-        _selectedTransition = null;
-        _selectedTrackIndex = trackIdx;
+        SelectPointerItem(item, trackIdx, Keyboard.Modifiers);
+        if (_selectedItem == null)
+        {
+            ReleaseMouseCapture();
+            e.Handled = true;
+            return;
+        }
         _dragTrackIndex = trackIdx;
-        ClipSelected?.Invoke(this, item);
-        TransitionSelected?.Invoke(this, null);
 
         var track = Sequence!.Tracks[trackIdx];
         if (track.Locked || item.Locked)
@@ -697,14 +912,25 @@ public sealed class TimelineControl : FrameworkElement
         _dragStartTime = item.TimelineStart;
         _dragOrigDuration = item.Duration;
         _dragOrigSourceStart = item.SourceStart;
+        _dragOrigVolume = item.Volume;
         _dragOriginMouseX = pos.X;
+        CaptureGroupDragSnapshots();
 
         var clipX = _viewport.GetClipX(item.TimelineStart);
         var clipW = _viewport.GetClipWidth(item.Duration);
         var distFromLeft = pos.X - clipX;
         var distFromRight = clipX + clipW - pos.X;
+        var itemRect = new Rect(clipX + 1, _viewport.TrackIndexToY(trackIdx) + 4, Math.Max(2, clipW - 2), _viewport.TrackHeight - 8);
+        var isAudioTrack = track.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice;
+        var nearVolumeLine = isAudioTrack && Math.Abs(pos.Y - GainToVolumeLineY(itemRect, item.Volume)) <= 7;
 
-        if (distFromLeft < TrimEdgeThreshold && item.Duration.Seconds > 0.2)
+        if (nearVolumeLine)
+        {
+            _isTrimming = true;
+            _dragMode = DragMode.Volume;
+            Cursor = Cursors.SizeNS;
+        }
+        else if (distFromLeft < TrimEdgeThreshold && item.Duration.Seconds > 0.2)
         {
             _isTrimming = true;
             _dragMode = DragMode.TrimLeft;
@@ -729,28 +955,56 @@ public sealed class TimelineControl : FrameworkElement
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
+        using var measurement = _telemetry.DetailedEnabled ? _telemetry.MeasureUiInput("timeline.mouse_move") : null;
         var pos = e.GetPosition(this);
+
+        if (UpdateBoxSelection(pos))
+        {
+            e.Handled = true;
+            return;
+        }
 
         if (_isPanning)
         {
             _viewport.Pan(pos.X - _lastMousePos.X, pos.Y - _lastMousePos.Y);
             _lastMousePos = pos;
             InvalidateVisual();
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
             return;
         }
 
         if (_dragFromPlayhead)
         {
-            _playheadTime = _viewport.PixelToTime(ClampContentX(pos.X));
+            PlayheadTime = _viewport.PixelToTime(ClampContentX(pos.X));
             PlayheadMoved?.Invoke(this, EventArgs.Empty);
-            InvalidateVisual();
             e.Handled = true;
             return;
         }
 
         if (_isTrimming && _dragItem != null)
         {
+            if (UpdateGroupTrimPreview(pos))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            if (_dragMode == DragMode.Volume)
+            {
+                var clipX = _viewport.GetClipX(_dragItem.TimelineStart);
+                var clipWidth = _viewport.GetClipWidth(_dragItem.Duration);
+                var clipRect = new Rect(
+                    clipX + 1,
+                    _viewport.TrackIndexToY(_selectedTrackIndex) + 4,
+                    Math.Max(2, clipWidth - 2),
+                    _viewport.TrackHeight - 8);
+                _dragItem.Volume = VolumeLineYToGain(clipRect, pos.Y);
+                InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+
             var totalDeltaSeconds = (pos.X - _dragOriginMouseX) / _viewport.PixelsPerSecond;
             const double minimumDurationSeconds = 0.1;
 
@@ -791,9 +1045,22 @@ public sealed class TimelineControl : FrameworkElement
 
         if (_isDraggingClip && _dragItem != null)
         {
-            var totalDeltaSeconds = (pos.X - _dragOriginMouseX) / _viewport.PixelsPerSecond;
-            var candidateStart = MediaTime.FromSeconds(
-                Math.Max(0, _dragStartTime.Seconds + totalDeltaSeconds));
+            if (UpdateGroupMovePreview(pos))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            var pixelsPerSecond = _viewport.PixelsPerSecond;
+            if (!double.IsFinite(pos.X) || !double.IsFinite(_dragOriginMouseX) ||
+                !double.IsFinite(pixelsPerSecond) || pixelsPerSecond <= 0)
+                return;
+
+            var totalDeltaSeconds = (pos.X - _dragOriginMouseX) / pixelsPerSecond;
+            var candidateSeconds = _dragStartTime.Seconds + totalDeltaSeconds;
+            if (!double.IsFinite(candidateSeconds)) return;
+
+            var candidateStart = MediaTime.FromSeconds(Math.Max(0, candidateSeconds));
             _dragItem.TimelineStart = SnapMoveStart(candidateStart, _dragItem.Duration, _dragItem);
 
             var candidateTrackIndex = GetTrackIndexAtY(pos.Y);
@@ -810,7 +1077,11 @@ public sealed class TimelineControl : FrameworkElement
         }
 
         var (hoverItem, _, _) = HitTest(pos);
-        if (HitTestTransition(pos) != null)
+        if (pos.X > _viewport.TrackHeaderWidth && HitTestMarker(pos.X) != null)
+        {
+            Cursor = Cursors.Hand;
+        }
+        else if (HitTestTransition(pos) != null)
         {
             Cursor = Cursors.Hand;
         }
@@ -831,6 +1102,14 @@ public sealed class TimelineControl : FrameworkElement
 
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
+        using var measurement = _telemetry.DetailedEnabled ? _telemetry.MeasureUiInput("timeline.mouse_up") : null;
+        if (FinishBoxSelection())
+        {
+            Cursor = Cursors.Arrow;
+            e.Handled = true;
+            return;
+        }
+
         if (IsMouseCaptured) ReleaseMouseCapture();
         Cursor = Cursors.Arrow;
 
@@ -842,21 +1121,55 @@ public sealed class TimelineControl : FrameworkElement
 
         if (_isDraggingClip && _dragItem != null)
         {
+            if (FinishGroupMove())
+            {
+                e.Handled = true;
+                return;
+            }
+
             var item = _dragItem;
             var newStart = item.TimelineStart;
+            var sourceTrackIndex = _selectedTrackIndex;
+            var targetTrackIndex = _dragTrackIndex;
+
             item.TimelineStart = _dragStartTime;
             _isDraggingClip = false;
-            ClipMoveRequested?.Invoke(this, new ClipMoveRequestedEventArgs(
-                item,
-                _selectedTrackIndex,
-                _dragTrackIndex,
-                newStart));
+            _dragMode = DragMode.None;
+            _dragItem = null;
+
+            if (double.IsFinite(newStart.Seconds) && targetTrackIndex >= 0)
+            {
+                ClipMoveRequested?.Invoke(this, new ClipMoveRequestedEventArgs(
+                    item,
+                    sourceTrackIndex,
+                    targetTrackIndex,
+                    newStart));
+            }
+
             e.Handled = true;
         }
 
         if (_isTrimming && _dragItem != null)
         {
+            if (FinishGroupTrim())
+            {
+                e.Handled = true;
+                return;
+            }
+
             var item = _dragItem;
+            if (_dragMode == DragMode.Volume)
+            {
+                var newVolume = item.Volume;
+                item.Volume = _dragOrigVolume;
+                _isTrimming = false;
+                ClipVolumeRequested?.Invoke(this, new ClipVolumeRequestedEventArgs(item, newVolume));
+                e.Handled = true;
+                _dragMode = DragMode.None;
+                _dragItem = null;
+                return;
+            }
+
             var newStart = item.TimelineStart;
             var newDuration = item.Duration;
             var newSourceStart = item.SourceStart;
@@ -892,6 +1205,7 @@ public sealed class TimelineControl : FrameworkElement
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        using var measurement = _telemetry.DetailedEnabled ? _telemetry.MeasureUiInput("timeline.key_down") : null;
         if (e.Key == Key.Space)
         {
             PlayPauseRequested?.Invoke(this, EventArgs.Empty);
@@ -923,33 +1237,10 @@ public sealed class TimelineControl : FrameworkElement
     private MediaTime SnapTime(MediaTime candidate, TimelineItem exclude)
     {
         if (!SnapEnabled || Sequence == null) return candidate;
-
+        EnsureSceneIndex();
         var thresholdSeconds = 10.0 / Math.Max(1, _viewport.PixelsPerSecond);
-        var bestSeconds = candidate.Seconds;
-        var bestDistance = thresholdSeconds + double.Epsilon;
-
-        void Consider(MediaTime target)
-        {
-            var distance = Math.Abs(target.Seconds - candidate.Seconds);
-            if (distance <= thresholdSeconds && distance < bestDistance)
-            {
-                bestDistance = distance;
-                bestSeconds = target.Seconds;
-            }
-        }
-
-        Consider(MediaTime.Zero);
-        foreach (var marker in Sequence.Markers)
-            Consider(marker.Time);
-
-        foreach (var item in Sequence.Tracks.SelectMany(track => track.Items))
-        {
-            if (item.Id == exclude.Id) continue;
-            Consider(item.TimelineStart);
-            Consider(item.TimelineEnd);
-        }
-
-        return MediaTime.FromSeconds(bestSeconds);
+        return MediaTime.FromSeconds(
+            _sceneIndex.FindNearestSnapPoint(candidate.Seconds, thresholdSeconds, exclude.Id));
     }
 
     private int GetTrackIndexAtY(double y)
@@ -962,37 +1253,38 @@ public sealed class TimelineControl : FrameworkElement
     private Marker? HitTestMarker(double x)
     {
         if (Sequence == null) return null;
-        const double threshold = 7;
-        return Sequence.Markers
-            .Select(marker => new { Marker = marker, Distance = Math.Abs(_viewport.TimeToPixel(marker.Time) - x) })
-            .Where(candidate => candidate.Distance <= threshold)
-            .OrderBy(candidate => candidate.Distance)
-            .Select(candidate => candidate.Marker)
-            .FirstOrDefault();
+        EnsureSceneIndex();
+        const double thresholdPixels = 7;
+        var time = _viewport.PixelToTime(x).Seconds;
+        return _sceneIndex.FindNearestMarker(
+            time,
+            thresholdPixels / Math.Max(1, _viewport.PixelsPerSecond));
+    }
+
+    private void SeekToMarker(Marker marker)
+    {
+        PlayheadTime = marker.Time;
+        _dragFromPlayhead = false;
+        _selectedItem = null;
+        _selectedItemIds.Clear();
+        _selectedTransition = null;
+        _selectedTrackIndex = -1;
+        ClipSelected?.Invoke(this, null);
+        TransitionSelected?.Invoke(this, null);
+        PlayheadMoved?.Invoke(this, EventArgs.Empty);
+        InvalidateVisual();
     }
 
     private (TimelineItem? item, int trackIndex, int itemIndex) HitTest(Point pos)
     {
         if (Sequence == null) return (null, -1, -1);
         if (!GetContentClipRect(includeRuler: false).Contains(pos)) return (null, -1, -1);
-
-        for (int t = 0; t < Sequence.Tracks.Count; t++)
-        {
-            var track = Sequence.Tracks[t];
-            var y = _viewport.TrackIndexToY(t);
-            if (pos.Y < y || pos.Y > y + _viewport.TrackHeight) continue;
-
-            for (int i = 0; i < track.Items.Count; i++)
-            {
-                var item = track.Items[i];
-                var x = _viewport.GetClipX(item.TimelineStart);
-                var w = _viewport.GetClipWidth(item.Duration);
-                if (pos.X >= x && pos.X <= x + w)
-                    return (item, t, i);
-            }
-        }
-
-        return (null, -1, -1);
+        EnsureSceneIndex();
+        var trackIndex = GetTrackIndexAtY(pos.Y);
+        if (trackIndex < 0) return (null, -1, -1);
+        var time = _viewport.PixelToTime(pos.X).Seconds;
+        var item = _sceneIndex.HitTestItem(trackIndex, time);
+        return item == null ? (null, -1, -1) : (item, trackIndex, 0);
     }
 
     private TransitionSelection? HitTestTransition(Point pos)
@@ -1011,33 +1303,18 @@ public sealed class TimelineControl : FrameworkElement
         return null;
     }
 
-    private IEnumerable<TransitionSelection> GetTransitionSlots()
+    private IReadOnlyList<TransitionSelection> GetTransitionSlots()
     {
-        if (Sequence == null) yield break;
-
-        for (var t = 0; t < Sequence.Tracks.Count; t++)
-        {
-            var items = Sequence.Tracks[t].Items
-                .OrderBy(item => item.TimelineStart.Seconds)
-                .ToList();
-            for (var i = 0; i < items.Count - 1; i++)
-            {
-                var left = items[i];
-                var right = items[i + 1];
-                var gap = right.TimelineStart.Seconds - left.TimelineEnd.Seconds;
-                if (Math.Abs(gap) > 0.05) continue;
-
-                var transition = Sequence.Transitions.FirstOrDefault(candidate =>
-                    candidate.LeftItemId == left.Id && candidate.RightItemId == right.Id);
-                yield return new TransitionSelection(transition, left, right, t);
-            }
-        }
+        if (Sequence == null) return [];
+        EnsureSceneIndex();
+        return _sceneIndex.TransitionSlots;
     }
 
     protected override Size MeasureOverride(Size availableSize)
     {
         _viewport.ViewportWidth = availableSize.Width;
         _viewport.ViewportHeight = availableSize.Height;
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
         return availableSize;
     }
 
@@ -1045,6 +1322,7 @@ public sealed class TimelineControl : FrameworkElement
     {
         _viewport.ViewportWidth = finalSize.Width;
         _viewport.ViewportHeight = finalSize.Height;
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
         return finalSize;
     }
 
@@ -1073,6 +1351,36 @@ public sealed class TimelineControl : FrameworkElement
 
     private double ClampContentX(double x) =>
         Math.Clamp(x, _viewport.TrackHeaderWidth, Math.Max(_viewport.TrackHeaderWidth, RenderSize.Width));
+
+    private static Dictionary<(ItemKind Kind, bool Audio), Brush> BuildClipBrushes()
+    {
+        var result = new Dictionary<(ItemKind, bool), Brush>();
+        foreach (var kind in Enum.GetValues<ItemKind>())
+        {
+            result[(kind, true)] = CreateFrozenGradient(Color.FromRgb(54, 42, 87), Color.FromRgb(32, 27, 54));
+            var colors = kind switch
+            {
+                ItemKind.Text => (Color.FromRgb(113, 52, 166), Color.FromRgb(71, 34, 111)),
+                ItemKind.Image => (Color.FromRgb(82, 64, 132), Color.FromRgb(46, 38, 76)),
+                ItemKind.Sticker => (Color.FromRgb(104, 73, 154), Color.FromRgb(61, 45, 91)),
+                ItemKind.AdjustmentLayer => (Color.FromRgb(83, 62, 119), Color.FromRgb(48, 38, 69)),
+                _ => (Color.FromRgb(65, 43, 105), Color.FromRgb(35, 27, 59)),
+            };
+            result[(kind, false)] = CreateFrozenGradient(colors.Item1, colors.Item2);
+        }
+        return result;
+    }
+
+    private static Brush CreateFrozenGradient(Color start, Color end) =>
+        Freeze(new LinearGradientBrush(start, end, 0));
+
+    private static T Freeze<T>(T value) where T : Freezable
+    {
+        value.Freeze();
+        return value;
+    }
+
+    private readonly record struct WaveformDrawingKey(int SourceIdentity, int PeakCount, int FallbackSeed);
 }
 
 public sealed record TransitionSelection(Transition? Transition, TimelineItem LeftItem, TimelineItem RightItem, int TrackIndex);
@@ -1091,6 +1399,18 @@ public sealed class ClipMoveRequestedEventArgs : EventArgs
     public int SourceTrackIndex { get; }
     public int TargetTrackIndex { get; }
     public MediaTime NewStart { get; }
+}
+
+public sealed class ClipVolumeRequestedEventArgs : EventArgs
+{
+    public ClipVolumeRequestedEventArgs(TimelineItem item, double newVolume)
+    {
+        Item = item;
+        NewVolume = newVolume;
+    }
+
+    public TimelineItem Item { get; }
+    public double NewVolume { get; }
 }
 
 public sealed class ClipTrimRequestedEventArgs : EventArgs

@@ -78,6 +78,71 @@ public sealed class ProjectSerializerTests
     }
 
     [Fact]
+    public void legacy_project_is_migrated_to_current_schema()
+    {
+        const string legacy = """
+        {
+          "name": "Legacy",
+          "sequences": [
+            {
+              "name": "Main",
+              "width": 1920,
+              "height": 1080,
+              "fps": 29.97,
+              "tracks": [],
+              "markers": [],
+              "transitions": []
+            }
+          ],
+          "mediaLibrary": [],
+          "mediaIntelligence": [],
+          "campaignDescription": "",
+          "tasks": []
+        }
+        """;
+
+        var project = ProjectSerializer.Deserialize(legacy);
+
+        Assert.Equal(Project.CurrentSchemaVersion, project.SchemaVersion);
+        Assert.Equal(FrameRate.Fps29_97, project.MainSequence!.FrameRate);
+        Assert.NotNull(project.MainSequence.Background);
+    }
+
+    [Fact]
+    public void multi_channel_animation_and_presentation_round_trip()
+    {
+        var project = new Project();
+        var sequence = project.MainSequence!;
+        sequence.FrameRate = FrameRate.Fps23_976;
+        sequence.Background = new CanvasBackground
+        {
+            Kind = CanvasBackgroundKind.LinearGradient,
+            PrimaryColor = "#112233",
+            SecondaryColor = "#445566",
+        };
+        sequence.LayoutGuides.Add(new LayoutGuide { Kind = LayoutGuideKind.YouTubeShorts, Name = "Shorts" });
+        var item = new TimelineItem { Kind = ItemKind.Image, Duration = MediaTime.FromSeconds(2) };
+        item.AnimationChannels.Add(new AnimationChannel
+        {
+            PropertyName = AnimationPropertyNames.Opacity,
+            DefaultValue = 1,
+            Keyframes =
+            {
+                new Keyframe { Time = MediaTime.Zero, Value = 0 },
+                new Keyframe { Time = MediaTime.FromSeconds(2), Value = 1 },
+            },
+        });
+        sequence.Tracks.Add(new Track { Kind = TrackKind.Overlay, Name = "O1", Items = { item } });
+
+        var restored = ProjectSerializer.Deserialize(ProjectSerializer.Serialize(project));
+
+        Assert.Equal(FrameRate.Fps23_976, restored.MainSequence!.FrameRate);
+        Assert.Equal(CanvasBackgroundKind.LinearGradient, restored.MainSequence.Background.Kind);
+        Assert.Single(restored.MainSequence.LayoutGuides);
+        Assert.Single(restored.MainSequence.Tracks[0].Items[0].AnimationChannels);
+    }
+
+    [Fact]
     public void serialized_json_contains_media_time_fields()
     {
         var project = new Project { Name = "MediaTime Test" };

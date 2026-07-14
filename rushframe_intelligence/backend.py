@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import BoundedSemaphore
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
@@ -19,6 +22,12 @@ from rushframe_intelligence.serialization import load_analysis
 PROTOCOL_VERSION = "2025-06-18"
 MAX_REQUEST_BYTES = 1024 * 1024
 DEFAULT_EDITOR_BRIDGE = "http://127.0.0.1:7320"
+EDITOR_SESSION_TOKEN = os.environ.get("RUSHFRAME_EDITOR_SESSION_TOKEN", "").strip()
+MAX_BACKEND_THREADS = max(2, min(16, int(os.environ.get("RUSHFRAME_BACKEND_MAX_THREADS", "6"))))
+BRIDGE_OPERATION_TIMEOUT_SECONDS = max(
+    30,
+    min(7200, int(os.environ.get("RUSHFRAME_BRIDGE_TIMEOUT_SECONDS", "1800"))),
+)
 
 TOOLS = [
     {
@@ -76,6 +85,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+                "base_revision": {"type": "integer", "minimum": 0},
                 "action": {
                     "type": "string",
                     "enum": [
@@ -116,6 +126,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+                "base_revision": {"type": "integer", "minimum": 0},
                 "output_path": {"type": "string"},
                 "require_approval": {"type": "boolean", "default": True},
             },
@@ -124,6 +135,26 @@ TOOLS = [
         },
     },
 ]
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    def __init__(self, *args: Any, max_workers: int = MAX_BACKEND_THREADS, **kwargs: Any) -> None:
+        self._worker_gate = BoundedSemaphore(max_workers)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        self._worker_gate.acquire()
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._worker_gate.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_gate.release()
 
 
 class RushframeBackendHandler(BaseHTTPRequestHandler):
@@ -148,7 +179,7 @@ class RushframeBackendHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         try:
             if parsed.path == "/health":
-                self._write_json({"status": "ok", "service": "rushframe-intelligence", "mcp": "/mcp"})
+                self._write_json({"status": "ok", "service": "rushframe-intelligence", "mcp": "/mcp", "sessionRequired": bool(EDITOR_SESSION_TOKEN)})
                 return
             if parsed.path == "/capabilities":
                 self._write_json(discover_capabilities())
@@ -183,6 +214,9 @@ class RushframeBackendHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if urlparse(self.path).path != "/mcp":
             self._write_json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
+            return
+        if EDITOR_SESSION_TOKEN and not _request_is_authorized(self.headers):
+            self._write_json({"error": "invalid agent session"}, HTTPStatus.UNAUTHORIZED)
             return
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
@@ -306,8 +340,23 @@ def _bridge_url(arguments: dict[str, Any], endpoint: str) -> str:
     return f"{base}/{endpoint.lstrip('/')}"
 
 
+def _bridge_headers() -> dict[str, str]:
+    if not EDITOR_SESSION_TOKEN:
+        return {}
+    return {"X-Rushframe-Session": EDITOR_SESSION_TOKEN}
+
+
+def _request_is_authorized(headers: Any) -> bool:
+    supplied = str(headers.get("X-Rushframe-Session", "")).strip()
+    if not supplied:
+        authorization = str(headers.get("Authorization", "")).strip()
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+    return bool(supplied) and secrets.compare_digest(supplied, EDITOR_SESSION_TOKEN)
+
+
 def _bridge_get(arguments: dict[str, Any], endpoint: str) -> object:
-    request = Request(_bridge_url(arguments, endpoint), method="GET")
+    request = Request(_bridge_url(arguments, endpoint), headers=_bridge_headers(), method="GET")
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -319,10 +368,10 @@ def _bridge_post(arguments: dict[str, Any], endpoint: str) -> object:
     request = Request(
         _bridge_url(arguments, endpoint),
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_bridge_headers()},
         method="POST",
     )
-    with urlopen(request, timeout=None) as response:
+    with urlopen(request, timeout=BRIDGE_OPERATION_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -342,7 +391,7 @@ def _required(query: dict[str, list[str]], name: str) -> str:
 
 
 def serve(host: str = "127.0.0.1", port: int = 7319) -> None:
-    server = ThreadingHTTPServer((host, port), RushframeBackendHandler)
+    server = BoundedThreadingHTTPServer((host, port), RushframeBackendHandler)
     print(json.dumps({"status": "ready", "host": host, "port": port, "mcp": f"http://{host}:{port}/mcp"}), flush=True)
     try:
         server.serve_forever(poll_interval=0.5)

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -6,10 +7,13 @@ using Rushframe.Media.Abstractions;
 
 namespace Rushframe.Media.Native;
 
-public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeService, IMediaExportService
+public sealed partial class FfmpegMediaService : IMediaProbeService, IMediaDerivativeService, IMediaExportService
 {
+    private const int MaxProbeCacheEntries = 256;
     private readonly string _ffmpegPath;
     private readonly string _ffprobePath;
+    private readonly ConcurrentDictionary<ProbeCacheKey, Lazy<Task<MediaProbeResult>>> _probeCache = new();
+    private readonly ConcurrentQueue<ProbeCacheKey> _probeCacheOrder = new();
 
     public FfmpegMediaService(string? ffmpegPath = null, string? ffprobePath = null)
     {
@@ -20,13 +24,44 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
     public async Task<MediaProbeResult> ProbeAsync(string path, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(path)) throw new FileNotFoundException("Media file not found.", path);
+        var info = new FileInfo(path);
+        var key = new ProbeCacheKey(
+            Path.GetFullPath(path),
+            info.Length,
+            info.LastWriteTimeUtc.Ticks);
+        var created = false;
+        var lazy = _probeCache.GetOrAdd(key, candidate =>
+        {
+            created = true;
+            return new Lazy<Task<MediaProbeResult>>(
+                () => ProbeCoreAsync(candidate.Path, CancellationToken.None),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        });
+        if (created)
+        {
+            _probeCacheOrder.Enqueue(key);
+            TrimProbeCache();
+        }
 
-        (string StdOut, string StdErr) output;
         try
         {
-            output = await RunAsync(
+            return await lazy.Value.WaitAsync(cancellationToken);
+        }
+        catch
+        {
+            _probeCache.TryRemove(key, out _);
+            throw;
+        }
+    }
+
+    private async Task<MediaProbeResult> ProbeCoreAsync(string path, CancellationToken cancellationToken)
+    {
+        FfmpegProcessRunner.ProcessResult output;
+        try
+        {
+            output = await FfmpegProcessRunner.RunAsync(
                 _ffprobePath,
-                $"-v error -print_format json -show_format -show_streams {Quote(path)}",
+                ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
                 cancellationToken);
         }
         catch when (_ffprobePath == "ffprobe")
@@ -34,7 +69,7 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
             return await ProbeWithFfmpegAsync(path, cancellationToken);
         }
 
-        using var doc = JsonDocument.Parse(output.StdOut);
+        using var doc = JsonDocument.Parse(output.StandardOutput);
         var root = doc.RootElement;
         var streams = new List<MediaStreamInfo>();
 
@@ -62,6 +97,12 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         return new MediaProbeResult(path, duration, size, streams);
     }
 
+    private void TrimProbeCache()
+    {
+        while (_probeCache.Count > MaxProbeCacheEntries && _probeCacheOrder.TryDequeue(out var oldest))
+            _probeCache.TryRemove(oldest, out _);
+    }
+
     public async Task GenerateProxyAsync(
         ProxyRequest request,
         IProgress<MediaJobProgress>? progress = null,
@@ -71,7 +112,9 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         progress?.Report(new MediaJobProgress(0, "Generating proxy"));
         await RunAsync(
             _ffmpegPath,
-            $"-y -i {Quote(request.SourcePath)} -vf scale=-2:{request.MaxHeight} -c:v libx264 -preset veryfast -crf 24 -c:a aac -b:a 128k {Quote(request.OutputPath)}",
+            ["-y", "-i", request.SourcePath, "-vf", $"scale=-2:{request.MaxHeight}",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+             "-c:a", "aac", "-b:a", "128k", request.OutputPath],
             cancellationToken);
         progress?.Report(new MediaJobProgress(100, "Proxy complete"));
     }
@@ -81,7 +124,8 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
         await RunAsync(
             _ffmpegPath,
-            $"-y -ss {FormatSeconds(request.Time)} -i {Quote(request.SourcePath)} -frames:v 1 -q:v 2 {Quote(request.OutputPath)}",
+            ["-y", "-ss", FormatSeconds(request.Time), "-i", request.SourcePath,
+             "-frames:v", "1", "-q:v", "2", request.OutputPath],
             cancellationToken);
     }
 
@@ -90,8 +134,65 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
         await RunAsync(
             _ffmpegPath,
-            $"-y -i {Quote(request.SourcePath)} -filter_complex \"aformat=channel_layouts=mono,showwavespic=s={request.Width}x{request.Height}:colors=#56B6C2\" -frames:v 1 {Quote(request.OutputPath)}",
+            ["-y", "-i", request.SourcePath, "-filter_complex",
+             $"aformat=channel_layouts=mono,showwavespic=s={request.Width}x{request.Height}:colors=#56B6C2",
+             "-frames:v", "1", request.OutputPath],
             cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<float>> GenerateWaveformPeaksAsync(
+        string sourcePath,
+        int peakCount = 2048,
+        CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(sourcePath)) throw new FileNotFoundException("Media file not found.", sourcePath);
+        peakCount = Math.Clamp(peakCount, 64, 16_384);
+
+        await using var jobLease = await FfmpegProcessRunner.AcquireAsync(cancellationToken);
+        var startInfo = FfmpegProcessRunner.CreateStartInfo(
+            _ffmpegPath,
+            ["-v", "error", "-i", sourcePath, "-vn", "-ac", "1", "-ar", "8000",
+             "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1"]);
+        using var process = Process.Start(startInfo)
+                            ?? throw new InvalidOperationException("Failed to start FFmpeg waveform analysis.");
+        var errorTask = FfmpegProcessRunner.ReadBoundedAsync(
+            process.StandardError,
+            256 * 1024,
+            preserveTail: true,
+            cancellationToken);
+
+        var accumulator = new StreamingPeakAccumulator(peakCount);
+        var buffer = new byte[64 * 1024];
+        int? pendingLowByte = null;
+        try
+        {
+            while (true)
+            {
+                var read = await process.StandardOutput.BaseStream.ReadAsync(buffer, cancellationToken);
+                if (read == 0) break;
+                var offset = 0;
+                if (pendingLowByte.HasValue && read > 0)
+                {
+                    accumulator.AddSample((short)(pendingLowByte.Value | (buffer[0] << 8)));
+                    pendingLowByte = null;
+                    offset = 1;
+                }
+                for (; offset + 1 < read; offset += 2)
+                    accumulator.AddSample((short)(buffer[offset] | (buffer[offset + 1] << 8)));
+                if (offset < read) pendingLowByte = buffer[offset];
+            }
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            FfmpegProcessRunner.TryKill(process);
+            throw;
+        }
+
+        var error = await errorTask;
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"FFmpeg waveform analysis failed: {error}");
+        return accumulator.ToPeaks();
     }
 
     public async Task ExportAsync(
@@ -108,7 +209,11 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         {
             await RunAsync(
                 _ffmpegPath,
-                $"-y -i {Quote(request.SourcePaths[0])} -vf scale={request.Width}:{request.Height}:force_original_aspect_ratio=decrease,pad={request.Width}:{request.Height}:(ow-iw)/2:(oh-ih)/2 -r {request.FrameRate.ToString(CultureInfo.InvariantCulture)} -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 192k {Quote(request.OutputPath)}",
+                ["-y", "-i", request.SourcePaths[0], "-vf",
+                 $"scale={request.Width}:{request.Height}:force_original_aspect_ratio=decrease,pad={request.Width}:{request.Height}:(ow-iw)/2:(oh-ih)/2",
+                 "-r", request.FrameRate.ToString(CultureInfo.InvariantCulture),
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                 "-c:a", "aac", "-b:a", "192k", request.OutputPath],
                 cancellationToken);
         }
         else
@@ -122,7 +227,11 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
                     cancellationToken);
                 await RunAsync(
                     _ffmpegPath,
-                    $"-y -f concat -safe 0 -i {Quote(listPath)} -vf scale={request.Width}:{request.Height}:force_original_aspect_ratio=decrease,pad={request.Width}:{request.Height}:(ow-iw)/2:(oh-ih)/2 -r {request.FrameRate.ToString(CultureInfo.InvariantCulture)} -c:v libx264 -preset veryfast -crf 20 -c:a aac -b:a 192k {Quote(request.OutputPath)}",
+                    ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-vf",
+                     $"scale={request.Width}:{request.Height}:force_original_aspect_ratio=decrease,pad={request.Width}:{request.Height}:(ow-iw)/2:(oh-ih)/2",
+                     "-r", request.FrameRate.ToString(CultureInfo.InvariantCulture),
+                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                     "-c:a", "aac", "-b:a", "192k", request.OutputPath],
                     cancellationToken);
             }
             finally
@@ -134,13 +243,17 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         progress?.Report(new MediaJobProgress(100, "Export complete"));
     }
 
-    public async Task ExportTimelineAsync(
+    private async Task ExportTimelineLegacyAsync(
         Project project,
         Sequence sequence,
         string outputPath,
         IProgress<MediaJobProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? outputWidth = null,
+        int? outputHeight = null)
     {
+        var renderWidth = Math.Max(2, outputWidth ?? sequence.Width);
+        var renderHeight = Math.Max(2, outputHeight ?? sequence.Height);
         var visualItems = sequence.Tracks
             .Where(t => (t.Kind is TrackKind.Video or TrackKind.Overlay or TrackKind.Text) && !t.Hidden)
             .OrderBy(t => t.Order)
@@ -150,12 +263,32 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
             .ThenBy(x => x.Item.TimelineStart.Seconds)
             .ToList();
         var audioItems = sequence.Tracks
-            .Where(t => t.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice && !t.Hidden && !t.Muted)
+            .Where(t => (t.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice) && !t.Hidden && !t.Muted)
             .OrderBy(t => t.Order)
             .SelectMany(t => t.Items.Select(i => new { Track = t, Item = i }))
             .Where(x => x.Item.MediaAssetId.HasValue && !x.Item.Muted)
             .OrderBy(x => x.Item.TimelineStart.Seconds)
             .ToList();
+
+        foreach (var entry in visualItems.Where(x => x.Item.Kind == ItemKind.Clip && !x.Track.Muted && !x.Item.Muted))
+        {
+            if (!entry.Item.MediaAssetId.HasValue) continue;
+            var asset = project.MediaLibrary.FirstOrDefault(a => a.Id == entry.Item.MediaAssetId.Value);
+            if (asset?.Kind != MediaKind.Video || !File.Exists(asset.OriginalPath)) continue;
+
+            try
+            {
+                var probe = await ProbeAsync(asset.OriginalPath, cancellationToken);
+                if (probe.Streams.Any(stream => stream.Kind == MediaStreamKind.Audio))
+                    audioItems.Add(entry);
+            }
+            catch
+            {
+                // A failed optional audio probe must not prevent rendering the visual stream.
+            }
+        }
+
+        audioItems = audioItems.OrderBy(x => x.Item.TimelineStart.Seconds).ToList();
 
         if (visualItems.Count == 0)
             throw new ArgumentException("Timeline has no visual items to export.", nameof(sequence));
@@ -164,7 +297,7 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         progress?.Report(new MediaJobProgress(0, "Building timeline render graph"));
 
         var args = new List<string> { "-y" };
-        var inputLabels = new List<string>();
+        var visualInputLabels = new Dictionary<TimelineItemId, string>();
         var audioInputLabels = new List<string>();
         var audioTimelineItems = new List<TimelineItem>();
         var inputIndex = 0;
@@ -175,9 +308,16 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
             if (!entry.Item.MediaAssetId.HasValue) continue;
             var asset = project.MediaLibrary.FirstOrDefault(a => a.Id == entry.Item.MediaAssetId.Value);
             if (asset == null || !File.Exists(asset.OriginalPath)) continue;
+            if (entry.Item.Kind == ItemKind.Image || asset.Kind == MediaKind.Image)
+            {
+                args.Add("-loop");
+                args.Add("1");
+                args.Add("-t");
+                args.Add(entry.Item.Duration.Seconds.ToString(CultureInfo.InvariantCulture));
+            }
             args.Add("-i");
             args.Add(asset.OriginalPath);
-            inputLabels.Add($"[{inputIndex}:v]");
+            visualInputLabels[entry.Item.Id] = $"[{inputIndex}:v]";
             inputIndex++;
         }
 
@@ -201,7 +341,6 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         filters.Add($"color=c=black:s={sequence.Width}x{sequence.Height}:r={sequence.Fps.ToString(CultureInfo.InvariantCulture)}:d={duration.ToString(CultureInfo.InvariantCulture)}[{baseLabel}]");
 
         var currentBase = baseLabel;
-        var mediaInputCursor = 0;
         var layerNumber = 0;
 
         foreach (var entry in visualItems)
@@ -218,19 +357,21 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
                 continue;
             }
 
-            if (mediaInputCursor >= inputLabels.Count) continue;
-            var input = inputLabels[mediaInputCursor++];
+            if (!visualInputLabels.TryGetValue(item.Id, out var input)) continue;
             var sourceStart = item.SourceStart.Seconds.ToString(CultureInfo.InvariantCulture);
-            var durationSeconds = item.Duration.Seconds.ToString(CultureInfo.InvariantCulture);
-            var effectiveSpeed = item.SpeedCurve?.ConstantSpeed ?? item.Speed;
-            var speed = Math.Clamp(effectiveSpeed, 0.1, 100).ToString(CultureInfo.InvariantCulture);
+            var effectiveSpeed = Math.Clamp(item.SpeedCurve?.ConstantSpeed ?? item.Speed, 0.1, 100);
+            var sourceDuration = item.Kind == ItemKind.Image
+                ? item.Duration.Seconds
+                : item.Duration.Seconds * effectiveSpeed;
+            var durationSeconds = sourceDuration.ToString(CultureInfo.InvariantCulture);
+            var speed = effectiveSpeed.ToString(CultureInfo.InvariantCulture);
             var vf = new List<string>
             {
                 $"trim=start={sourceStart}:duration={durationSeconds}",
                 "setpts=PTS-STARTPTS",
             };
             if (item.Reversed) vf.Add("reverse");
-            if (Math.Abs(item.Speed - 1.0) > 0.0001) vf.Add($"setpts=PTS/{speed}");
+            if (Math.Abs(effectiveSpeed - 1.0) > 0.0001) vf.Add($"setpts=PTS/{speed}");
             vf.Add($"scale=iw*{item.Transform.ScaleX.ToString(CultureInfo.InvariantCulture)}:ih*{item.Transform.ScaleY.ToString(CultureInfo.InvariantCulture)}");
             if (Math.Abs(item.Transform.RotationDegrees) > 0.0001)
                 vf.Add($"rotate={DegreesToRadians(item.Transform.RotationDegrees).ToString(CultureInfo.InvariantCulture)}:ow=rotw(iw):oh=roth(ih):c=none");
@@ -241,8 +382,10 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
 
             var composed = $"v{layerNumber}";
             var blend = BlendModeToFfmpeg(item.BlendMode);
-            var overlayX = item.Transform.PositionX.ToString(CultureInfo.InvariantCulture);
-            var overlayY = item.Transform.PositionY.ToString(CultureInfo.InvariantCulture);
+            var offsetX = item.Transform.PositionX.ToString(CultureInfo.InvariantCulture);
+            var offsetY = item.Transform.PositionY.ToString(CultureInfo.InvariantCulture);
+            var overlayX = $"(main_w-overlay_w)/2+({offsetX})";
+            var overlayY = $"(main_h-overlay_h)/2+({offsetY})";
             var enable = $"between(t,{item.TimelineStart.Seconds.ToString(CultureInfo.InvariantCulture)},{item.TimelineEnd.Seconds.ToString(CultureInfo.InvariantCulture)})";
             filters.Add(blend == null
                 ? $"[{currentBase}][{layerLabel}]overlay=x={overlayX}:y={overlayY}:enable='{enable}'[{composed}]"
@@ -262,7 +405,7 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
                 var delayMs = Math.Max(0, (int)Math.Round(item.TimelineStart.Seconds * 1000));
                 var af = new List<string>
                 {
-                    $"atrim=start={item.SourceStart.Seconds.ToString(CultureInfo.InvariantCulture)}:duration={item.Duration.Seconds.ToString(CultureInfo.InvariantCulture)}",
+                    $"atrim=start={item.SourceStart.Seconds.ToString(CultureInfo.InvariantCulture)}:duration={(item.Duration.Seconds * Math.Clamp(item.SpeedCurve?.ConstantSpeed ?? item.Speed, 0.1, 100)).ToString(CultureInfo.InvariantCulture)}",
                     "asetpts=PTS-STARTPTS",
                 };
                 var speed = item.SpeedCurve?.ConstantSpeed ?? item.Speed;
@@ -270,6 +413,13 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
                     af.AddRange(BuildAtempoFilters(Math.Clamp(speed, 0.5, 100)));
                 if (Math.Abs(item.Volume - 1.0) > 0.0001)
                     af.Add($"volume={item.Volume.ToString(CultureInfo.InvariantCulture)}");
+                if (Math.Abs(item.Pan) > 0.0001)
+                {
+                    var pan = Math.Clamp(item.Pan, -1, 1);
+                    var leftGain = pan <= 0 ? 1.0 : 1.0 - pan;
+                    var rightGain = pan >= 0 ? 1.0 : 1.0 + pan;
+                    af.Add($"pan=stereo|c0={leftGain.ToString(CultureInfo.InvariantCulture)}*c0|c1={rightGain.ToString(CultureInfo.InvariantCulture)}*c1");
+                }
                 if (item.FadeInDuration.Seconds > 0)
                     af.Add($"afade=t=in:st=0:d={item.FadeInDuration.Seconds.ToString(CultureInfo.InvariantCulture)}");
                 if (item.FadeOutDuration.Seconds > 0)
@@ -284,6 +434,13 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
 
             mixedAudioLabel = "aout";
             filters.Add($"{string.Join("", audioLayerLabels)}amix=inputs={audioLayerLabels.Count}:normalize=0:duration=longest[{mixedAudioLabel}]");
+        }
+
+        if (renderWidth != sequence.Width || renderHeight != sequence.Height)
+        {
+            const string outputVideoLabel = "vout";
+            filters.Add($"[{currentBase}]scale={renderWidth}:{renderHeight}:force_original_aspect_ratio=decrease,pad={renderWidth}:{renderHeight}:(ow-iw)/2:(oh-ih)/2:color=black[{outputVideoLabel}]");
+            currentBase = outputVideoLabel;
         }
 
         args.Add("-filter_complex");
@@ -314,7 +471,7 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         args.Add(outputPath);
 
         progress?.Report(new MediaJobProgress(5, "Rendering timeline"));
-        await RunAsync(_ffmpegPath, string.Join(" ", args.Select(QuoteArgumentIfNeeded)), cancellationToken);
+        await RunAsync(_ffmpegPath, args, cancellationToken);
         progress?.Report(new MediaJobProgress(100, "Timeline export complete"));
     }
 
@@ -323,7 +480,7 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         await RunAsync(
             _ffmpegPath,
-            $"-y -i {Quote(sourcePath)} -vn -acodec pcm_s16le -ar 48000 -ac 2 {Quote(outputPath)}",
+            ["-y", "-i", sourcePath, "-vn", "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2", outputPath],
             cancellationToken);
     }
 
@@ -331,49 +488,28 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
     {
         if (!string.IsNullOrWhiteSpace(explicitPath)) return explicitPath;
 
-        var local = Path.Combine(AppContext.BaseDirectory, ".tools", "bin", OperatingSystem.IsWindows() ? $"{toolName}.exe" : toolName);
-        if (File.Exists(local)) return local;
+        var executableName = OperatingSystem.IsWindows() ? $"{toolName}.exe" : toolName;
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, ".tools", "bin", executableName);
+            if (File.Exists(candidate)) return candidate;
+        }
 
-        var repoLocal = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".tools", "bin", OperatingSystem.IsWindows() ? $"{toolName}.exe" : toolName));
-        return File.Exists(repoLocal) ? repoLocal : toolName;
+        return toolName;
     }
 
-    private static async Task<(string StdOut, string StdErr)> RunAsync(string fileName, string arguments, CancellationToken cancellationToken)
+    private static async Task<(string StdOut, string StdErr)> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"{Path.GetFileName(fileName)} failed with exit code {process.ExitCode}: {stderr}");
-
-        return (stdout, stderr);
+        var result = await FfmpegProcessRunner.RunAsync(fileName, arguments, cancellationToken);
+        return (result.StandardOutput, result.StandardError);
     }
 
     private async Task<MediaProbeResult> ProbeWithFfmpegAsync(string path, CancellationToken cancellationToken)
     {
-        var output = await RunAllowFailureAsync(_ffmpegPath, $"-hide_banner -i {Quote(path)}", cancellationToken);
+        var output = await RunAllowFailureAsync(_ffmpegPath, ["-hide_banner", "-i", path], cancellationToken);
         var text = output.StdErr;
         var duration = TimeSpan.Zero;
         var durationMatch = System.Text.RegularExpressions.Regex.Match(text, @"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)");
@@ -407,31 +543,17 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
         return new MediaProbeResult(path, duration, new FileInfo(path).Length, streams);
     }
 
-    private static async Task<(string StdOut, string StdErr, int ExitCode)> RunAllowFailureAsync(string fileName, string arguments, CancellationToken cancellationToken)
+    private static async Task<(string StdOut, string StdErr, int ExitCode)> RunAllowFailureAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-        return (await stdoutTask, await stderrTask, process.ExitCode);
+        var result = await FfmpegProcessRunner.RunAsync(
+            fileName,
+            arguments,
+            cancellationToken,
+            throwOnFailure: false);
+        return (result.StandardOutput, result.StandardError, result.ExitCode);
     }
 
     private static string Quote(string value) => $"\"{value.Replace("\"", "\\\"")}\"";
@@ -633,5 +755,61 @@ public sealed class FfmpegMediaService : IMediaProbeService, IMediaDerivativeSer
             return num / den;
 
         return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+    }
+
+    private readonly record struct ProbeCacheKey(string Path, long Length, long LastWriteTicks);
+
+    private sealed class StreamingPeakAccumulator
+    {
+        private readonly float[] _buckets;
+        private long _bucketSize = 1;
+        private long _sampleCount;
+
+        public StreamingPeakAccumulator(int peakCount)
+        {
+            _buckets = new float[peakCount];
+        }
+
+        public void AddSample(short sample)
+        {
+            var bucketIndex = _sampleCount / _bucketSize;
+            if (bucketIndex >= _buckets.Length)
+            {
+                CollapseBuckets();
+                bucketIndex = _sampleCount / _bucketSize;
+            }
+
+            var normalized = Math.Clamp(Math.Abs((int)sample) / 32768f, 0, 1);
+            var index = (int)Math.Min(_buckets.Length - 1, bucketIndex);
+            if (normalized > _buckets[index]) _buckets[index] = normalized;
+            _sampleCount++;
+        }
+
+        public IReadOnlyList<float> ToPeaks()
+        {
+            if (_sampleCount == 0) return new float[_buckets.Length];
+            var used = Math.Clamp((int)Math.Ceiling(_sampleCount / (double)_bucketSize), 1, _buckets.Length);
+            if (used == _buckets.Length) return _buckets;
+
+            var result = new float[_buckets.Length];
+            for (var index = 0; index < result.Length; index++)
+            {
+                var source = Math.Min(used - 1, index * used / result.Length);
+                result[index] = _buckets[source];
+            }
+            return result;
+        }
+
+        private void CollapseBuckets()
+        {
+            var target = 0;
+            for (var source = 0; source < _buckets.Length; source += 2)
+            {
+                var right = Math.Min(source + 1, _buckets.Length - 1);
+                _buckets[target++] = Math.Max(_buckets[source], _buckets[right]);
+            }
+            Array.Clear(_buckets, target, _buckets.Length - target);
+            _bucketSize = checked(_bucketSize * 2);
+        }
     }
 }

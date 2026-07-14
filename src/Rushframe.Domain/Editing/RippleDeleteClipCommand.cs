@@ -20,6 +20,8 @@ public sealed class RippleDeleteClipCommand : IEditCommand
         {
             var idx = track.Items.FindIndex(i => i.Id == ItemId);
             if (idx < 0) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (track.Items[idx].Locked) return EditResult.Fail("Item is locked");
 
             _trackId = track.Id;
             _index = idx;

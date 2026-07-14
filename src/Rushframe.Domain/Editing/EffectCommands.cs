@@ -6,9 +6,11 @@ public sealed class AddEffectCommand : IEditCommand
 
     public required TimelineItemId ItemId { get; init; }
     public required string EffectTypeId { get; init; }
+    public bool Enabled { get; init; } = true;
     public Dictionary<string, object> Parameters { get; init; } = [];
 
     private EffectInstance? _added;
+    private int _insertIndex = -1;
 
     public EditResult Execute(Sequence sequence)
     {
@@ -16,13 +18,20 @@ public sealed class AddEffectCommand : IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (item.Locked) return EditResult.Fail("Item is locked");
 
-            _added = new EffectInstance
+            _added ??= new EffectInstance
             {
                 EffectTypeId = EffectTypeId,
+                Enabled = Enabled,
                 Parameters = new Dictionary<string, object>(Parameters),
             };
-            item.Effects.Add(_added);
+            if (item.Effects.Any(effect => effect.Id == _added.Id))
+                return EditResult.Fail("Effect is already present");
+
+            _insertIndex = _insertIndex < 0 ? item.Effects.Count : Math.Clamp(_insertIndex, 0, item.Effects.Count);
+            item.Effects.Insert(_insertIndex, _added);
             return EditResult.Ok();
         }
 
@@ -38,8 +47,10 @@ public sealed class AddEffectCommand : IEditCommand
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
 
-            item.Effects.Remove(_added);
-            _added = null;
+            var index = item.Effects.FindIndex(effect => effect.Id == _added.Id);
+            if (index < 0) return EditResult.Fail("Effect not found");
+            _insertIndex = index;
+            item.Effects.RemoveAt(index);
             return EditResult.Ok();
         }
 
@@ -55,6 +66,7 @@ public sealed class RemoveEffectCommand : IEditCommand
     public required EffectInstanceId EffectInstanceId { get; init; }
 
     private EffectInstance? _removed;
+    private int _removedIndex = -1;
 
     public EditResult Execute(Sequence sequence)
     {
@@ -62,10 +74,13 @@ public sealed class RemoveEffectCommand : IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (item.Locked) return EditResult.Fail("Item is locked");
 
             var idx = item.Effects.FindIndex(e => e.Id == EffectInstanceId);
             if (idx < 0) return EditResult.Fail("Effect not found");
 
+            _removedIndex = idx;
             _removed = item.Effects[idx];
             item.Effects.RemoveAt(idx);
             return EditResult.Ok();
@@ -83,8 +98,9 @@ public sealed class RemoveEffectCommand : IEditCommand
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
 
-            item.Effects.Add(_removed);
+            item.Effects.Insert(Math.Clamp(_removedIndex, 0, item.Effects.Count), _removed);
             _removed = null;
+            _removedIndex = -1;
             return EditResult.Ok();
         }
 
@@ -110,6 +126,9 @@ public sealed class UpdateEffectCommand : IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (item.Locked) return EditResult.Fail("Item is locked");
 
             var effect = item.Effects.FirstOrDefault(e => e.Id == EffectInstanceId);
             if (effect == null) return EditResult.Fail("Effect not found");
@@ -163,6 +182,9 @@ public sealed class ReorderEffectCommand : IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (item.Locked) return EditResult.Fail("Item is locked");
 
             var idx = item.Effects.FindIndex(e => e.Id == EffectInstanceId);
             if (idx < 0) return EditResult.Fail("Effect not found");

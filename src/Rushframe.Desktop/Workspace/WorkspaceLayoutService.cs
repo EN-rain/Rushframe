@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Rushframe.Desktop.Workspace;
 
@@ -9,6 +10,7 @@ public sealed class WorkspaceLayoutService
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     private readonly string _filePath;
@@ -25,7 +27,8 @@ public sealed class WorkspaceLayoutService
         {
             var json = File.ReadAllText(_filePath);
             var layout = JsonSerializer.Deserialize<WorkspaceLayout>(json, JsonOptions);
-            if (layout?.Version == WorkspaceLayout.SchemaVersion) return layout;
+            if (layout != null && layout.Version is >= 2 and <= WorkspaceLayout.SchemaVersion)
+                return layout.Normalize();
         }
         catch
         {

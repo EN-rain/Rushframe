@@ -144,28 +144,7 @@ public sealed class DuplicateTrackCommand : IEditCommand
         };
 
         foreach (var item in original.Items)
-        {
-            _duplicate.Items.Add(new TimelineItem
-            {
-                Kind = item.Kind,
-                MediaAssetId = item.MediaAssetId,
-                TimelineStart = item.TimelineStart,
-                Duration = item.Duration,
-                SourceStart = item.SourceStart,
-                SourceDuration = item.SourceDuration,
-                Speed = item.Speed,
-                Volume = item.Volume,
-                Opacity = item.Opacity,
-                Transform = new Transform2D
-                {
-                    PositionX = item.Transform.PositionX,
-                    PositionY = item.Transform.PositionY,
-                    ScaleX = item.Transform.ScaleX,
-                    ScaleY = item.Transform.ScaleY,
-                    RotationDegrees = item.Transform.RotationDegrees,
-                },
-            });
-        }
+            _duplicate.Items.Add(TimelineItemCloner.Clone(item));
 
         sequence.Tracks.Insert(idx + 1, _duplicate);
         return EditResult.Ok();

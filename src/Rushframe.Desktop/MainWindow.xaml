@@ -8,8 +8,8 @@
         Icon="Assets/Rushframe_icon.png"
         Width="1220"
         Height="650"
-        MinWidth="1024"
-        MinHeight="560"
+        MinWidth="1120"
+        MinHeight="620"
         WindowStyle="None"
         ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen">
@@ -62,7 +62,8 @@
 
         <Style x:Key="ActiveRailButtonStyle" TargetType="Button" BasedOn="{StaticResource RailButtonStyle}">
             <Setter Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}" />
         </Style>
 
@@ -78,11 +79,93 @@
             <Setter Property="Fill" Value="Transparent" />
         </Style>
 
+        <Style x:Key="OperationProgressBarStyle" TargetType="ProgressBar">
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Background" Value="{StaticResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <Grid Margin="1" ClipToBounds="True">
+                                <Border x:Name="PART_Track"
+                                        Background="{StaticResource PanelRaisedBrush}"
+                                        CornerRadius="3" />
+                                <Border x:Name="PART_Indicator"
+                                        HorizontalAlignment="Left"
+                                        Background="{TemplateBinding Foreground}"
+                                        CornerRadius="3" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsIndeterminate" Value="True">
+                                <Setter TargetName="PART_Indicator" Property="Width" Value="44" />
+                                <Setter TargetName="PART_Indicator" Property="Opacity" Value="0.75" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="CompactTabButtonStyle" TargetType="Button" BasedOn="{StaticResource CommandButtonStyle}">
             <Setter Property="MinHeight" Value="30" />
             <Setter Property="Padding" Value="9,5" />
             <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
             <Setter Property="FontSize" Value="10.5" />
+        </Style>
+
+        <Style x:Key="HeaderNoHoverButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="9,5" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="ToolTipService.InitialShowDelay" Value="350" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderThickness="0"
+                                CornerRadius="4">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource SubtleHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
+                                <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource PressedSurfaceBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="HeaderNoHoverIconButtonStyle" TargetType="Button" BasedOn="{StaticResource HeaderNoHoverButtonStyle}">
+            <Setter Property="MinWidth" Value="32" />
+            <Setter Property="Padding" Value="7,4" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
 
         <Style x:Key="InspectorSectionStyle" TargetType="Border">
@@ -113,6 +196,7 @@
             <Setter Property="MinHeight" Value="30" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="OverridesDefaultStyle" Value="True" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
@@ -140,85 +224,10 @@
             </Setter>
         </Style>
 
-        <Style x:Key="CompactMonitorComboStyle" TargetType="ComboBox">
-            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-            <Setter Property="Background" Value="{StaticResource EditorRailBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource ControlOutlineBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="ItemContainerStyle" Value="{StaticResource InspectorEffectComboItemStyle}" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="MinHeight" Value="28" />
-            <Setter Property="Height" Value="28" />
-            <Setter Property="Padding" Value="8,0,28,0" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid>
-                            <ToggleButton x:Name="DropDownToggle"
-                                          IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
-                                          Focusable="False"
-                                          ClickMode="Press"
-                                          Background="Transparent"
-                                          BorderThickness="0">
-                                <ToggleButton.Template>
-                                    <ControlTemplate TargetType="ToggleButton">
-                                        <Border x:Name="ComboChrome"
-                                                Background="{Binding Background, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                                BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                                BorderThickness="{Binding BorderThickness, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                                CornerRadius="5">
-                                            <Grid>
-                                                <TextBlock Margin="9,0,27,0"
-                                                           VerticalAlignment="Center"
-                                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                                           Text="{Binding SelectedItem.Content, RelativeSource={RelativeSource AncestorType=ComboBox}}" />
-                                                <Path Data="M 0 0 L 4 4 L 8 0"
-                                                      Stroke="{StaticResource TextMutedBrush}"
-                                                      StrokeThickness="1.4"
-                                                      Width="8" Height="4"
-                                                      Stretch="Fill"
-                                                      HorizontalAlignment="Right"
-                                                      VerticalAlignment="Center"
-                                                      Margin="0,0,10,0" />
-                                            </Grid>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="ComboChrome" Property="Background" Value="{StaticResource PanelHoverBrush}" />
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </ToggleButton.Template>
-                            </ToggleButton>
-                            <Popup x:Name="PART_Popup"
-                                   IsOpen="{TemplateBinding IsDropDownOpen}"
-                                   Placement="Bottom"
-                                   AllowsTransparency="True"
-                                   Focusable="False"
-                                   PopupAnimation="Fade">
-                                <Border Margin="0,4,0,0"
-                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
-                                        MaxHeight="240"
-                                        Background="{StaticResource PanelRaisedBrush}"
-                                        BorderBrush="{StaticResource BorderStrongBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="6"
-                                        Padding="3">
-                                    <ScrollViewer CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                        <ItemsPresenter />
-                                    </ScrollViewer>
-                                </Border>
-                            </Popup>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
         <Style x:Key="InspectorEffectComboStyle" TargetType="ComboBox">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Background" Value="{StaticResource EditorRailBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource ControlOutlineBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="MinHeight" Value="34" />
             <Setter Property="Padding" Value="10,0,34,0" />
@@ -411,7 +420,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Chrome"
-                                Background="Transparent"
+                                Background="{TemplateBinding Background}"
                                 BorderThickness="0"
                                 CornerRadius="0">
                             <ContentPresenter HorizontalAlignment="Center"
@@ -420,14 +429,14 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource TitleBarHoverBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource TitleBarPressedBrush}" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderThickness" Value="0,0,0,2" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource TitleBarPressedBrush}" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.4" />
@@ -453,7 +462,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Chrome"
-                                Background="Transparent"
+                                Background="{TemplateBinding Background}"
                                 BorderThickness="0"
                                 CornerRadius="0">
                             <ContentPresenter HorizontalAlignment="Center"
@@ -464,14 +473,13 @@
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource CloseHoverBrush}" />
                                 <Setter Property="Foreground" Value="White" />
                             </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                            </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource ClosePressedBrush}" />
                                 <Setter Property="Foreground" Value="White" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderThickness" Value="0,0,0,2" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.4" />
@@ -509,9 +517,16 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
+                <ScrollViewer x:Name="HeaderMenuScrollViewer"
+                              Grid.Column="0"
+                              HorizontalScrollBarVisibility="Hidden"
+                              VerticalScrollBarVisibility="Disabled"
+                              PanningMode="HorizontalOnly"
+                              Focusable="False"
+                              PreviewMouseWheel="HeaderMenuScrollViewer_PreviewMouseWheel"
+                              shell:WindowChrome.IsHitTestVisibleInChrome="True">
                 <StackPanel Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                            VerticalAlignment="Center">
                     <Border x:Name="HeaderBrandIcon" Width="24" Height="24" CornerRadius="5" Background="{StaticResource PanelRaisedBrush}" Margin="0,0,10,0" ClipToBounds="True">
                         <Image Source="Assets/Rushframe_icon.png"
                                Width="24"
@@ -522,13 +537,16 @@
                     <TextBlock x:Name="HeaderBrandText" Text="" Visibility="Collapsed" />
                     <Menu>
                         <MenuItem Header="File">
+                            <MenuItem Header="New Project" Command="c:EditorCommands.NewProject" InputGestureText="Ctrl+N" />
                             <MenuItem Header="Open Project" Command="c:EditorCommands.OpenProject" InputGestureText="Ctrl+O" />
+                            <MenuItem x:Name="OpenRecentMenu" Header="Open Recent" />
+                            <MenuItem x:Name="RecoverLatestAutosaveMenuItem" Header="Recover Latest Autosave" />
                             <MenuItem Header="Save Project" Command="c:EditorCommands.SaveProject" InputGestureText="Ctrl+S" />
                             <Separator />
                             <MenuItem Header="Import Media" Command="c:EditorCommands.ImportMedia" InputGestureText="Ctrl+I" />
                             <MenuItem Header="Relink Selected Media" Command="c:EditorCommands.RelinkMedia" />
                             <MenuItem Header="Generate Media Cache" Command="c:EditorCommands.GenerateMediaCache" />
-                            <MenuItem Header="Import Media Intelligence" Command="c:EditorCommands.ImportMediaIntelligence" />
+                            <MenuItem Header="Import AI Analysis" Command="c:EditorCommands.ImportMediaIntelligence" />
                             <Separator />
                             <MenuItem Header="Export" Command="c:EditorCommands.Render" InputGestureText="Ctrl+R" />
                         </MenuItem>
@@ -537,49 +555,83 @@
                         </MenuItem>
                     </Menu>
                     <Button x:Name="McpStatusButton"
-                            Style="{StaticResource CommandButtonStyle}"
-                            Content="MCP"
-                            MinWidth="48"
+                            Style="{StaticResource HeaderNoHoverIconButtonStyle}"
+                            Width="34"
                             Height="30"
                             Margin="8,0,0,0"
-                            Padding="10,0"
-                            ToolTip="Open local agent setup and status" />
+                            ToolTip="Open local agent setup and MCP status"
+                            AutomationProperties.Name="Local agent and MCP status">
+                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,11 A5,5 0 1 0 14,11 A5,5 0 1 0 4,11 M9,6 L9,3 M6.5,3 L11.5,3 M5.5,9 L7,9 M11,9 L12.5,9 M6,14 C7.8,15.5 10.2,15.5 12,14" />
+                    </Button>
+                    <Border Margin="8,0,0,0"
+                            Padding="0"
+                            MinWidth="96"
+                            MaxWidth="220"
+                            Background="Transparent"
+                            BorderBrush="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="0"
+                            ToolTip="Click to rename the project; press Enter to save"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Grid>
+                            <TextBlock x:Name="ProjectNameText"
+                                       Text="Untitled"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       FontSize="11"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       Cursor="IBeam"
+                                       AutomationProperties.Name="Project name" />
+                            <TextBox x:Name="ProjectNameEditBox"
+                                     Visibility="Collapsed"
+                                     MinHeight="24"
+                                     Padding="2,0"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     VerticalContentAlignment="Center"
+                                     AutomationProperties.Name="Edit project name" />
+                        </Grid>
+                    </Border>
                 </StackPanel>
+                </ScrollViewer>
 
-                <TextBlock x:Name="HeaderCenterTitle"
-                           Grid.Column="1"
-                           Text="Rushframe Editor"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Foreground="{StaticResource TextMutedBrush}"
-                           FontSize="11"
-                           IsHitTestVisible="False" />
+                <Button x:Name="GlobalFunctionSearchButton"
+                        Grid.Column="1"
+                        Width="34"
+                        Height="30"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource HeaderNoHoverIconButtonStyle}"
+                        ToolTip="Search commands (Ctrl+K)"
+                        AutomationProperties.Name="Search commands"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Path Style="{StaticResource ToolbarIconStyle}"
+                          Margin="0"
+                          Data="M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M11.5,11.5 L16,16" />
+                </Button>
 
                 <StackPanel Grid.Column="2"
                             Orientation="Horizontal"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.Undo" ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo">
+                    <Button Style="{StaticResource HeaderNoHoverIconButtonStyle}" Command="c:EditorCommands.Undo" ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo">
                         <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M7,5 L3,9 L7,13 M3,9 L11,9 C14,9 16,11 16,14" />
                     </Button>
-                    <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.Redo" ToolTip="Redo (Ctrl+Y)" AutomationProperties.Name="Redo" Margin="0,0,4,0">
+                    <Button Style="{StaticResource HeaderNoHoverIconButtonStyle}" Command="c:EditorCommands.Redo" ToolTip="Redo (Ctrl+Y)" AutomationProperties.Name="Redo" Margin="0,0,4,0">
                         <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M11,5 L15,9 L11,13 M15,9 L7,9 C4,9 2,11 2,14" />
                     </Button>
-                    <Button x:Name="SettingsButton" Style="{StaticResource IconButtonStyle}" ToolTip="Settings (Ctrl+,)" AutomationProperties.Name="Settings" Margin="0,0,8,0">
-                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M9,3 A6,6 0 1 0 9,15 A6,6 0 1 0 9,3 M9,6 A3,3 0 1 0 9,12 A3,3 0 1 0 9,6" />
+                    <Button x:Name="SettingsButton" Style="{StaticResource HeaderNoHoverIconButtonStyle}" ToolTip="Settings (Ctrl+,)" AutomationProperties.Name="Settings" Margin="0,0,8,0">
+                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M9,2 L10,4.2 L12.4,3.6 L13.4,5.8 L15.8,6.4 L15.2,8.8 L17,10.5 L15.2,12.2 L15.8,14.6 L13.4,15.2 L12.4,17.4 L10,16.8 L9,19 L8,16.8 L5.6,17.4 L4.6,15.2 L2.2,14.6 L2.8,12.2 L1,10.5 L2.8,8.8 L2.2,6.4 L4.6,5.8 L5.6,3.6 L8,4.2 Z M6.5,10.5 A2.5,2.5 0 1 0 11.5,10.5 A2.5,2.5 0 1 0 6.5,10.5" />
                     </Button>
                     <Button x:Name="HeaderExportButton"
-                            Style="{StaticResource PrimaryButtonStyle}"
+                            Style="{StaticResource PrimaryIconButtonStyle}"
                             Command="c:EditorCommands.Render"
-                            MinWidth="104"
+                            Width="40"
                             Margin="0,7,10,7"
                             ToolTip="Export project (Ctrl+R)"
                             AutomationProperties.Name="Export project">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Data="M3,12 L3,15 L15,15 L15,12 M9,2 L9,11 M5.5,7.5 L9,11 L12.5,7.5" />
-                            <TextBlock Text="Export" Foreground="White" />
-                        </StackPanel>
+                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Data="M3,12 L3,15 L15,15 L15,12 M9,2 L9,11 M5.5,7.5 L9,11 L12.5,7.5" />
                     </Button>
                     <Button x:Name="MinimizeWindowButton"
                             Style="{StaticResource WindowControlButtonStyle}"
@@ -591,7 +643,7 @@
                             Style="{StaticResource WindowControlButtonStyle}"
                             ToolTip="Maximize"
                             AutomationProperties.Name="Maximize or restore window">
-                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,4 L14,4 L14,14 L4,14 Z" />
+                        <Path x:Name="MaximizeWindowIcon" Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,4 L14,4 L14,14 L4,14 Z" />
                     </Button>
                     <Button x:Name="CloseWindowButton"
                             Style="{StaticResource CloseWindowControlButtonStyle}"
@@ -606,161 +658,242 @@
         <!-- Editor workspace -->
         <Grid x:Name="MainGrid" Grid.Row="1" Background="{StaticResource WindowBrush}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="MediaColumn" Width="390" MinWidth="0" />
+                <ColumnDefinition x:Name="MediaColumn" Width="*" MinWidth="160" />
                 <ColumnDefinition x:Name="MediaSplitterColumn" Width="4" />
-                <ColumnDefinition Width="*" MinWidth="300" />
+                <ColumnDefinition x:Name="PreviewColumn" Width="*" MinWidth="160" />
                 <ColumnDefinition x:Name="InspectorSplitterColumn" Width="4" />
-                <ColumnDefinition x:Name="InspectorColumn" Width="300" MinWidth="0" />
+                <ColumnDefinition x:Name="InspectorColumn" Width="*" MinWidth="160" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="WorkspaceRow" Height="*" MinHeight="0" />
-                <RowDefinition Height="46" />
-                <RowDefinition x:Name="TimelineRow" Height="250" MinHeight="180" />
+                <RowDefinition x:Name="WorkspaceRow" Height="*" MinHeight="160" />
+                <RowDefinition x:Name="WorkspaceSplitterRow" Height="4" />
+                <RowDefinition x:Name="TimelineRow" Height="*" MinHeight="160" />
             </Grid.RowDefinitions>
 
             <!-- Library rail and asset browser -->
             <Border x:Name="MediaBorder"
                     Grid.Column="0"
                     Grid.Row="0"
+                    AutomationProperties.Name="Media window"
                     Background="{StaticResource EditorPanelBrush}"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,0,1,1">
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="58" />
                         <ColumnDefinition x:Name="AssetPanelColumn" Width="*" />
                     </Grid.ColumnDefinitions>
 
-                    <Border Background="{StaticResource EditorRailBrush}"
-                            BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="0,0,1,0">
-                        <StackPanel Margin="0,10,0,10">
-                            <Button x:Name="SideMediaButton" Style="{StaticResource ActiveRailButtonStyle}" ToolTip="Show or hide project assets" AutomationProperties.Name="Upload media">
-                                <StackPanel>
-                                    <Path Style="{StaticResource RailIconStyle}" Data="M9,2 L9,12 M5,6 L9,2 L13,6 M3,12 L3,16 L15,16 L15,12" HorizontalAlignment="Center" />
-                                    <TextBlock Text="Upload" FontSize="10.5" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" HorizontalAlignment="Center" Margin="0,4,0,0" />
-                                </StackPanel>
-                            </Button>
-                        </StackPanel>
-                    </Border>
-
-                    <Grid x:Name="AssetPanelContent" Grid.Column="1">
+                    <Grid x:Name="AssetPanelContent">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="44" />
-                            <RowDefinition Height="42" />
-                            <RowDefinition Height="34" />
+                            <RowDefinition Height="48" />
+                            <RowDefinition Height="38" />
                             <RowDefinition Height="*" />
-                            <RowDefinition Height="32" />
+                            <RowDefinition Height="36" />
                         </Grid.RowDefinitions>
 
-                        <Grid Margin="14,0,12,0">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="Project Assets" FontWeight="SemiBold" FontSize="13" />
-                            </StackPanel>
+                        <Grid x:Name="MediaWindowTitleBar"
+                              Margin="8,0,12,0"
+                              Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="MediaWindowDragHandle"
+                                    Grid.Column="0"
+                                    Width="28"
+                                    Height="28"
+                                    Cursor="SizeAll"
+                                    Background="Transparent"
+                                    ToolTip="Drag to move Project Files"
+                                    AutomationProperties.Name="Move Project Files window">
+                                <TextBlock Text="⠿" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+                            </Border>
+                            <TextBlock x:Name="MediaWindowTitleText"
+                                       Grid.Column="1"
+                                       Text="Project Files"
+                                       FontWeight="SemiBold"
+                                       FontSize="13"
+                                       Margin="6,0,0,0"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False" />
+                            <Button x:Name="MediaCloseWindowButton"
+                                    Grid.Column="2"
+                                    Style="{StaticResource IconButtonStyle}"
+                                    Width="28"
+                                    Height="28"
+                                    Visibility="Collapsed"
+                                    ToolTip="Close Project Files window"
+                                    AutomationProperties.Name="Close Project Files window">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L13,13 M13,5 L5,13" />
+                            </Button>
                         </Grid>
 
-                        <Grid Grid.Row="1" Margin="14,7,12,7">
+                        <Grid Grid.Row="1" Margin="12,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="170" />
+                            </Grid.ColumnDefinitions>
                             <Grid>
-                                <TextBox x:Name="MediaSearchBox" Padding="28,5,8,5" ToolTip="Filter media by file name" AutomationProperties.Name="Search project assets" />
+                                <TextBox x:Name="MediaSearchBox"
+                                         MinHeight="32"
+                                         Padding="30,0,8,0"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="Search project files by name or folder"
+                                         AutomationProperties.Name="Search project files" />
                                 <Path Data="M7,2 A5,5 0 1 0 7,12 A5,5 0 1 0 7,2 M11,11 L16,16"
                                       Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.4" Width="16" Height="16" Stretch="Uniform" Margin="8,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False" />
                                 <TextBlock x:Name="MediaSearchHint"
-                                           Text="Search assets..."
+                                           Text="Search files or folders..."
                                            Foreground="{StaticResource TextMutedBrush}"
-                                           Margin="29,0,0,0"
+                                           Margin="31,0,0,0"
                                            VerticalAlignment="Center"
                                            IsHitTestVisible="False" />
                             </Grid>
+                            <ComboBox x:Name="ProjectFolderFilterCombo"
+                                      Grid.Column="2"
+                                      SelectedIndex="0"
+                                      ToolTip="Filter by source folder"
+                                      AutomationProperties.Name="Project folder filter" />
                         </Grid>
 
-                        <Grid Grid.Row="2" Margin="14,0,12,0">
+                        <Grid Grid.Row="2" Margin="12,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Button x:Name="AllMediaFilterButton" Grid.Column="0" Style="{StaticResource CompactTabButtonStyle}" Content="All" />
-                            <Button x:Name="VideoFilterButton" Grid.Column="1" Style="{StaticResource CompactTabButtonStyle}" Content="Video" />
-                            <Button x:Name="AudioFilterButton" Grid.Column="2" Style="{StaticResource CompactTabButtonStyle}" Content="Audio" />
-                            <Button x:Name="ImageFilterButton" Grid.Column="3" Style="{StaticResource CompactTabButtonStyle}" Content="Images" />
+                            <Button x:Name="AllMediaFilterButton" Grid.Column="0" Style="{StaticResource IconButtonStyle}" ToolTip="Show every project file" AutomationProperties.Name="All files">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L8,4 L10,6 L16,6 L15,15 L3,15 Z" />
+                            </Button>
+                            <Button x:Name="VideoFilterButton" Grid.Column="1" Style="{StaticResource IconButtonStyle}" ToolTip="Show video files" AutomationProperties.Name="Video files">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L13,4 L13,14 L3,14 Z M13,7 L17,5 L17,13 L13,11" />
+                            </Button>
+                            <Button x:Name="AudioFilterButton" Grid.Column="2" Style="{StaticResource IconButtonStyle}" ToolTip="Show audio files" AutomationProperties.Name="Audio files">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,7 L8,7 L12,4 L12,14 L8,11 L5,11 Z M14,7 C16,8 16,10 14,11" />
+                            </Button>
+                            <Button x:Name="ImageFilterButton" Grid.Column="3" Style="{StaticResource IconButtonStyle}" ToolTip="Show image files" AutomationProperties.Name="Image files">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L15,4 L15,14 L3,14 Z M5,12 L9,8 L12,11 L14,9 M6,7 A1,1 0 1 0 8,7" />
+                            </Button>
                         </Grid>
 
-                        <Grid Grid.Row="3" Margin="10,4,8,0">
-                            <ListBox x:Name="MediaList"
-                                     SelectionMode="Single"
-                                     ScrollViewer.CanContentScroll="True"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.VirtualizationMode="Recycling">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <ui:VirtualizingWrapPanel ItemWidth="108" ItemHeight="102" />
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
-                                        <Setter Property="Height" Value="102" />
-                                        <Setter Property="Padding" Value="3" />
-                                        <Setter Property="Margin" Value="2" />
-                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Grid Grid.Row="3" Margin="8,5,8,0">
+                            <ListView x:Name="MediaList"
+                                      SelectionMode="Single"
+                                      Background="Transparent"
+                                      BorderBrush="{StaticResource BorderBrush}"
+                                      BorderThickness="1"
+                                      Foreground="{StaticResource TextBrush}"
+                                      ScrollViewer.CanContentScroll="True"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling">
+                                <ListView.Resources>
+                                    <Style TargetType="{x:Type GridViewColumnHeader}">
+                                        <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                        <Setter Property="Background" Value="{StaticResource EditorRailBrush}" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                                        <Setter Property="BorderThickness" Value="0,0,1,1" />
+                                        <Setter Property="Padding" Value="8,5" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Left" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="{x:Type GridViewColumnHeader}">
+                                                    <Border x:Name="HeaderChrome"
+                                                            Background="{TemplateBinding Background}"
+                                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                                            BorderThickness="{TemplateBinding BorderThickness}">
+                                                        <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                          VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="HeaderChrome" Property="Background" Value="{StaticResource PanelHoverBrush}" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
                                     </Style>
-                                </ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="66" />
-                                                <RowDefinition Height="*" />
-                                            </Grid.RowDefinitions>
-                                            <Border CornerRadius="5"
-                                                    Background="{StaticResource EditorMonitorBrush}"
-                                                    BorderBrush="{StaticResource BorderBrush}"
-                                                    BorderThickness="1"
-                                                    ClipToBounds="True">
-                                                <Grid>
-                                                    <TextBlock Text="{Binding FallbackGlyph}"
-                                                               Foreground="{StaticResource TextMutedBrush}"
-                                                               FontSize="20"
-                                                               FontWeight="SemiBold"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center" />
-                                                    <Image Source="{Binding Thumbnail}"
-                                                           Stretch="UniformToFill"
-                                                           RenderOptions.BitmapScalingMode="HighQuality" />
-                                                    <Border HorizontalAlignment="Left" VerticalAlignment="Top" Background="{StaticResource AccentSurfaceBrush}" CornerRadius="0,0,4,0" Padding="4,2">
-                                                        <TextBlock Text="{Binding KindText}" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource AccentHoverBrush}" />
+                                </ListView.Resources>
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="{x:Type ListViewItem}">
+                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Padding" Value="6,4" />
+                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="{x:Type ListViewItem}">
+                                                    <Border x:Name="RowChrome"
+                                                            Background="Transparent"
+                                                            BorderBrush="Transparent"
+                                                            BorderThickness="1"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <GridViewRowPresenter VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
                                                     </Border>
-                                                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="{StaticResource EditorOverlayBrush}" CornerRadius="4,0,0,0" Padding="4,2">
-                                                        <TextBlock Text="{Binding DurationText}" FontFamily="Cascadia Mono, Consolas" FontSize="10" Foreground="White" />
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="RowChrome" Property="Background" Value="{StaticResource PanelHoverBrush}" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="True">
+                                                            <Setter TargetName="RowChrome" Property="Background" Value="{StaticResource SelectionBrush}" />
+                                                            <Setter TargetName="RowChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListView.ItemContainerStyle>
+                                <ListView.View>
+                                    <GridView AllowsColumnReorder="True">
+                                        <GridViewColumn Width="42">
+                                            <GridViewColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="30" Height="24" CornerRadius="4" Background="{StaticResource EditorMonitorBrush}" ClipToBounds="True">
+                                                        <Grid>
+                                                            <TextBlock Text="{Binding FallbackGlyph}" FontSize="7.5" FontWeight="SemiBold" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality" />
+                                                        </Grid>
                                                     </Border>
-                                                </Grid>
-                                            </Border>
-                                            <StackPanel Grid.Row="1" Margin="1,4,1,0">
-                                                <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" FontSize="10.5" TextTrimming="CharacterEllipsis" ToolTip="{Binding Asset.OriginalPath}" />
-                                                <TextBlock Text="{Binding DurationText}" Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" Margin="0,1,0,0" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                                                </DataTemplate>
+                                            </GridViewColumn.CellTemplate>
+                                        </GridViewColumn>
+                                        <GridViewColumn Header="Name" Width="190" DisplayMemberBinding="{Binding FileName}" />
+                                        <GridViewColumn Header="Type" Width="78" DisplayMemberBinding="{Binding KindText}" />
+                                        <GridViewColumn Header="Folder" Width="230" DisplayMemberBinding="{Binding FolderDisplayName}" />
+                                        <GridViewColumn Header="Duration" Width="74" DisplayMemberBinding="{Binding DurationText}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
                             <StackPanel x:Name="MediaEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <Border Width="42" Height="42" CornerRadius="9" Background="{StaticResource AccentSurfaceBrush}" HorizontalAlignment="Center">
-                                    <Path Data="M4,6 L9,6 L11,8 L18,8 L17,17 L4,17 Z" Stroke="{StaticResource AccentHoverBrush}" StrokeThickness="1.5" Fill="Transparent" Stretch="Uniform" Margin="10" />
+                                <Border Width="46" Height="46" CornerRadius="10" Background="{StaticResource AccentSurfaceBrush}" HorizontalAlignment="Center">
+                                    <Path Data="M3,6 L8,6 L10,8 L17,8 L16,16 L3,16 Z" Stroke="{StaticResource AccentHoverBrush}" StrokeThickness="1.5" Fill="Transparent" Stretch="Uniform" Margin="11" />
                                 </Border>
-                                <TextBlock Text="No project assets" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,0" />
-                                <TextBlock Text="Import media to begin editing." Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,4,0,0" />
-                                <Button Style="{StaticResource PrimaryButtonStyle}" Command="c:EditorCommands.ImportMedia" Content="Import Media" Margin="0,12,0,0" HorizontalAlignment="Center" />
+                                <TextBlock Text="No project files" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,0" />
+                                <TextBlock Text="Import video, audio, images, fonts, or subtitles." Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="240" />
                             </StackPanel>
                         </Grid>
 
                         <Border Grid.Row="4" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="12,0">
                             <Grid>
-                                <TextBlock x:Name="MediaCountText" Text="0 items" Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" VerticalAlignment="Center" />
+                                <TextBlock x:Name="MediaCountText" Text="0 files" Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" VerticalAlignment="Center" />
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                    <Button x:Name="PreviewSelectedMediaButton" Style="{StaticResource CommandButtonStyle}" Content="Preview" ToolTip="Preview selected asset" />
-                                    <Button x:Name="AddToTimelineButton" Style="{StaticResource PrimaryButtonStyle}" Content="Add" MinWidth="52" Margin="5,0,0,0" ToolTip="Add selected asset to timeline" />
+                                    <Button x:Name="CreativeAssetsButton" Style="{StaticResource IconButtonStyle}" ToolTip="Browse licensed local creative assets" AutomationProperties.Name="Creative assets library">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,3 L8,3 L8,8 L3,8 Z M10,3 L15,3 L15,8 L10,8 Z M3,10 L8,10 L8,15 L3,15 Z M10,10 L15,10 L15,15 L10,15 Z" />
+                                    </Button>
+                                    <Button x:Name="PreviewSelectedMediaButton" Style="{StaticResource IconButtonStyle}" Margin="5,0,0,0" ToolTip="Preview selected file" AutomationProperties.Name="Preview selected file">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,3 L15,9 L5,15 Z" />
+                                    </Button>
+                                    <Button x:Name="AddToTimelineButton" Style="{StaticResource PrimaryIconButtonStyle}" Margin="5,0,0,0" ToolTip="Add selected file to timeline" AutomationProperties.Name="Add selected file to timeline">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M3,5 L15,5 M3,9 L11,9 M3,13 L11,13 M14,9 L14,15 M11,12 L17,12" />
+                                    </Button>
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -780,6 +913,7 @@
             <Border x:Name="PreviewBorder"
                     Grid.Column="2"
                     Grid.Row="0"
+                    AutomationProperties.Name="Preview window"
                     Background="{StaticResource ChromeBrush}"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,0,0,1">
@@ -789,22 +923,96 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="32" />
                         <RowDefinition Height="34" />
-                        <RowDefinition Height="76" />
+                        <RowDefinition x:Name="PreviewTransportRow" Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <Grid Margin="14,0">
+                    <Grid x:Name="PreviewHeader"
+                          Margin="6,0,10,0"
+                          Background="Transparent">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="Source Monitor" FontWeight="SemiBold" FontSize="12" />
-                            <TextBlock x:Name="ProjectNameText" Text="Untitled Project" Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="10,0,0,0" />
+                        <Border x:Name="PreviewWindowDragHandle"
+                                Grid.Column="0"
+                                Width="28"
+                                Height="28"
+                                Cursor="SizeAll"
+                                Background="Transparent"
+                                ToolTip="Drag to move Preview"
+                                AutomationProperties.Name="Move Preview window">
+                            <TextBlock Text="⠿" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+                        </Border>
+                        <TextBlock x:Name="PreviewWindowTitleText"
+                                   Grid.Column="1"
+                                   Text="Preview"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False" />
+                        <StackPanel Grid.Column="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center"
+                                    Margin="10,0,8,0">
+                            <Button x:Name="PreviewPreviousFrameButton" Style="{StaticResource IconButtonStyle}" ToolTip="Previous frame (Left)" AutomationProperties.Name="Previous source frame">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,4 L4,14 M14,4 L7,9 L14,14 Z" />
+                            </Button>
+                            <Button x:Name="PreviewStopButton" Style="{StaticResource IconButtonStyle}" ToolTip="Stop" AutomationProperties.Name="Stop source preview">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L13,5 L13,13 L5,13 Z" Fill="{StaticResource TextSecondaryBrush}" StrokeThickness="0" />
+                            </Button>
+                            <Button x:Name="PreviewPauseButton" Style="{StaticResource TransportButtonStyle}" ToolTip="Pause" AutomationProperties.Name="Pause source preview">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,4 L8,4 L8,14 L5,14 Z M10,4 L13,4 L13,14 L10,14 Z" Fill="{StaticResource TextSecondaryBrush}" StrokeThickness="0" />
+                            </Button>
+                            <Button x:Name="PreviewPlayButton" Style="{StaticResource PrimaryIconButtonStyle}" MinWidth="44" Margin="4,0" ToolTip="Play/Pause (Space)" AutomationProperties.Name="Play source preview">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,3 L15,9 L5,15 Z" Fill="White" StrokeThickness="0" />
+                            </Button>
+                            <Button x:Name="PreviewNextFrameButton" Style="{StaticResource IconButtonStyle}" ToolTip="Next frame (Right)" AutomationProperties.Name="Next source frame">
+                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M14,4 L14,14 M4,4 L11,9 L4,14 Z" />
+                            </Button>
                         </StackPanel>
-                        <TextBlock x:Name="PreviewSourceNameText" Grid.Column="1" Text="Nothing selected" Foreground="{StaticResource TextSecondaryBrush}" FontSize="10.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+                        <TextBlock x:Name="PreviewSourceNameText" Grid.Column="3" Text="Nothing selected" Foreground="{StaticResource TextSecondaryBrush}" FontSize="10.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="260" Margin="0,0,8,0" />
+                        <Button x:Name="PreviewFreeLayoutButton"
+                                Grid.Column="4"
+                                Style="{StaticResource IconButtonStyle}"
+                                Width="30" Height="28"
+                                ToolTip="Use free adaptive Preview sizing"
+                                AutomationProperties.Name="Free Preview layout">
+                            <Path x:Name="PreviewFreeLayoutIcon" Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,7 L3,3 L7,3 M11,3 L15,3 L15,7 M15,11 L15,15 L11,15 M7,15 L3,15 L3,11 M6,6 L12,12 M12,6 L6,12" />
+                        </Button>
+                        <Button x:Name="PreviewFullscreenButton"
+                                Grid.Column="5"
+                                Style="{StaticResource IconButtonStyle}"
+                                Width="30" Height="28"
+                                ToolTip="Enter fullscreen Preview"
+                                AutomationProperties.Name="Toggle fullscreen Preview">
+                            <Path x:Name="PreviewFullscreenIcon" Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,7 L3,3 L7,3 M11,3 L15,3 L15,7 M15,11 L15,15 L11,15 M7,15 L3,15 L3,11" />
+                        </Button>
+                        <Button x:Name="PreviewOrientationButton"
+                                Grid.Column="6"
+                                Style="{StaticResource IconButtonStyle}"
+                                Width="30" Height="28"
+                                VerticalAlignment="Center"
+                                ToolTip="Switch preview window to portrait"
+                                AutomationProperties.Name="Switch preview window to portrait">
+                            <Path x:Name="PreviewOrientationIcon" Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,2 L13,2 L13,16 L5,16 Z M8,14 L10,14" />
+                        </Button>
                     </Grid>
 
-                    <Border Grid.Row="1" Background="{StaticResource EditorMonitorBrush}" BorderBrush="{StaticResource BorderStrongBrush}" BorderThickness="1" CornerRadius="4" Margin="14,0,14,5" ClipToBounds="True">
+                    <Border x:Name="PreviewMonitorBorder"
+                            Grid.Row="1"
+                            Margin="14,0,14,5"
+                            Background="{StaticResource EditorMonitorBrush}"
+                            BorderBrush="{StaticResource BorderStrongBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            ClipToBounds="True">
                         <Grid x:Name="PreviewSurface">
                             <Grid.LayoutTransform>
                                 <ScaleTransform x:Name="PreviewScaleTransform" ScaleX="1" ScaleY="1" />
@@ -816,12 +1024,27 @@
                                           Stretch="Uniform"
                                           ScrubbingEnabled="True"
                                           Volume="1" />
+                            <Viewbox x:Name="RealtimePreviewViewbox"
+                                     Visibility="Collapsed"
+                                     Stretch="Uniform"
+                                     StretchDirection="Both"
+                                     IsHitTestVisible="False">
+                                <Canvas x:Name="RealtimePreviewCanvas"
+                                        Width="1080"
+                                        Height="1920"
+                                        Background="Black"
+                                        ClipToBounds="True" />
+                            </Viewbox>
                             <Grid x:Name="PreviewGuidesOverlay" Visibility="Collapsed" IsHitTestVisible="False">
                                 <Border Margin="40" BorderBrush="#66FFFFFF" BorderThickness="1" />
                                 <Border Margin="20" BorderBrush="#33FFFFFF" BorderThickness="1" />
                                 <Border Width="1" Background="#44FFFFFF" HorizontalAlignment="Center" />
                                 <Border Height="1" Background="#44FFFFFF" VerticalAlignment="Center" />
                             </Grid>
+                            <Canvas x:Name="PreviewInteractionCanvas"
+                                    Visibility="Collapsed"
+                                    Background="Transparent"
+                                    ClipToBounds="True" />
                         </Grid>
                     </Border>
 
@@ -854,53 +1077,62 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="PreviewTimeBox" Width="82" Height="24" Text="00:00" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" VerticalContentAlignment="Center" ToolTip="Enter source timecode" />
+                        <TextBox x:Name="PreviewTimeBox" Width="82" Height="24" Text="00:00" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" VerticalContentAlignment="Center" ToolTip="Enter source timecode" Visibility="Collapsed" />
                         <TextBlock x:Name="PreviewMarkInText" Grid.Column="1" Text="In --:--" Foreground="{StaticResource TextMutedBrush}" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0" />
                         <TextBlock x:Name="PreviewMarkOutText" Grid.Column="2" Text="Out --:--" Foreground="{StaticResource TextMutedBrush}" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0" />
-                        <ComboBox x:Name="PreviewRecentCombo" Grid.Column="4" Width="150" Height="24" DisplayMemberPath="OriginalPath" ToolTip="Recent source media" />
                     </Grid>
 
-                    <Border Grid.Row="4" Background="{StaticResource EditorRailBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                    <Border Grid.Row="4"
+                            MinHeight="76"
+                            Background="{StaticResource EditorRailBrush}"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="0,1,0,0">
                         <Grid Margin="10,6">
-                            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                            <ScrollViewer x:Name="PreviewTransportScrollViewer"
+                                          HorizontalScrollBarVisibility="Hidden"
                                           VerticalScrollBarVisibility="Disabled"
-                                          PanningMode="HorizontalOnly">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button x:Name="PreviewMarkInButton" Style="{StaticResource IconButtonStyle}" Content="I" ToolTip="Mark In (I)" AutomationProperties.Name="Set source mark in" />
-                                    <Button x:Name="PreviewMarkOutButton" Style="{StaticResource IconButtonStyle}" Content="O" ToolTip="Mark Out (O)" AutomationProperties.Name="Set source mark out" />
-                                    <Button x:Name="PreviewClearMarksButton" Style="{StaticResource IconButtonStyle}" Content="×" ToolTip="Clear In/Out" AutomationProperties.Name="Clear source marks" />
-                                    <Button x:Name="PreviewPreviousFrameButton" Style="{StaticResource IconButtonStyle}" Content="◀|" ToolTip="Previous frame (Left)" AutomationProperties.Name="Previous source frame" />
-                                    <Button x:Name="PreviewStopButton" Style="{StaticResource IconButtonStyle}" ToolTip="Stop" AutomationProperties.Name="Stop source preview">
-                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L13,5 L13,13 L5,13 Z" Fill="{StaticResource TextSecondaryBrush}" StrokeThickness="0" />
+                                          PanningMode="HorizontalOnly"
+                                          PreviewMouseWheel="PreviewTransportScrollViewer_PreviewMouseWheel">
+                                <StackPanel x:Name="PreviewTransportPanel"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                    <Button x:Name="PreviewMarkInButton" Style="{StaticResource IconButtonStyle}" ToolTip="Mark In (I)" AutomationProperties.Name="Set source mark in">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,3 L5,15 M8,5 L14,5 M8,13 L14,13" />
                                     </Button>
-                                    <Button x:Name="PreviewPauseButton" Style="{StaticResource TransportButtonStyle}" ToolTip="Pause" AutomationProperties.Name="Pause source preview">
-                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,4 L8,4 L8,14 L5,14 Z M10,4 L13,4 L13,14 L10,14 Z" Fill="{StaticResource TextSecondaryBrush}" StrokeThickness="0" />
+                                    <Button x:Name="PreviewMarkOutButton" Style="{StaticResource IconButtonStyle}" ToolTip="Mark Out (O)" AutomationProperties.Name="Set source mark out">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M13,3 L13,15 M4,5 L10,5 M4,13 L10,13" />
                                     </Button>
-                                    <Button x:Name="PreviewPlayButton" Style="{StaticResource PrimaryButtonStyle}" MinWidth="44" Margin="4,0" ToolTip="Play/Pause (Space)" AutomationProperties.Name="Play source preview">
-                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,3 L15,9 L5,15 Z" Fill="White" StrokeThickness="0" />
+                                    <Button x:Name="PreviewClearMarksButton" Style="{StaticResource IconButtonStyle}" ToolTip="Clear In/Out" AutomationProperties.Name="Clear source marks">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,4 L14,14 M14,4 L4,14 M2,2 L16,2" />
                                     </Button>
-                                    <Button x:Name="PreviewNextFrameButton" Style="{StaticResource IconButtonStyle}" Content="|▶" ToolTip="Next frame (Right)" AutomationProperties.Name="Next source frame" />
-                                    <ToggleButton x:Name="PreviewLoopToggle" Style="{StaticResource ToolToggleButtonStyle}" Content="Loop" ToolTip="Loop marked range" />
-                                    <ComboBox x:Name="PreviewSpeedCombo" Style="{StaticResource CompactMonitorComboStyle}" Width="72" Margin="4,0" ToolTip="Playback speed">
-                                        <ComboBoxItem Content="0.25x" Tag="0.25" />
-                                        <ComboBoxItem Content="0.5x" Tag="0.5" />
-                                        <ComboBoxItem Content="1x" Tag="1" IsSelected="True" />
-                                        <ComboBoxItem Content="1.5x" Tag="1.5" />
-                                        <ComboBoxItem Content="2x" Tag="2" />
-                                    </ComboBox>
-                                    <Button x:Name="PreviewInsertButton" Style="{StaticResource CommandButtonStyle}" Content="Insert" Margin="4,0,0,0" ToolTip="Insert marked range at playhead" />
-                                    <Button x:Name="PreviewOverwriteButton" Style="{StaticResource CommandButtonStyle}" Content="Overwrite" Margin="4,0,0,0" ToolTip="Overwrite marked range at playhead" />
-                                    <ToggleButton x:Name="PreviewMuteToggle" Style="{StaticResource ToolToggleButtonStyle}" Content="Mute" Margin="12,0,0,0" />
-                                    <Slider x:Name="PreviewVolumeSlider" Width="62" Minimum="0" Maximum="1" Value="1" Margin="4,0" ToolTip="Preview volume" />
-                                    <ComboBox x:Name="PreviewZoomCombo" Style="{StaticResource CompactMonitorComboStyle}" Width="78" ToolTip="Monitor zoom">
-                                        <ComboBoxItem Content="Fit" Tag="1" IsSelected="True" />
-                                        <ComboBoxItem Content="50%" Tag="0.5" />
-                                        <ComboBoxItem Content="100%" Tag="1" />
-                                        <ComboBoxItem Content="200%" Tag="2" />
-                                    </ComboBox>
-                                    <ToggleButton x:Name="PreviewGuidesToggle" Style="{StaticResource ToolToggleButtonStyle}" Content="Guides" Margin="4,0,0,0" />
-                                    <Button x:Name="PreviewSnapshotButton" Style="{StaticResource IconButtonStyle}" Content="▣" ToolTip="Save current frame" AutomationProperties.Name="Save preview snapshot" />
-                                    <Button x:Name="PreviewFullscreenButton" Style="{StaticResource IconButtonStyle}" Content="⛶" ToolTip="Toggle fullscreen monitor" AutomationProperties.Name="Toggle preview fullscreen" />
+                                    <ToggleButton x:Name="PreviewLoopToggle" Style="{StaticResource ToolToggleButtonStyle}" ToolTip="Loop marked range" AutomationProperties.Name="Loop marked range">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,7 C5,3 13,3 15,7 M15,7 L12,5 M15,7 L13,10 M14,11 C12,15 4,15 3,11 M3,11 L6,13 M3,11 L5,8" />
+                                    </ToggleButton>
+                                    <Button x:Name="PreviewSpeedButton" Style="{StaticResource IconButtonStyle}" Margin="4,0" ToolTip="Playback speed: 1x. Click to cycle." AutomationProperties.Name="Cycle playback speed">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,12 A6,6 0 1 1 15,12 M9,9 L13,6 M9,9 L9,4" />
+                                    </Button>
+                                    <Button x:Name="PreviewInsertButton" Style="{StaticResource IconButtonStyle}" Margin="4,0,0,0" ToolTip="Insert marked range at playhead" AutomationProperties.Name="Insert marked range">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L3,14 M7,5 L13,9 L7,13 Z M15,4 L15,14" />
+                                    </Button>
+                                    <Button x:Name="PreviewOverwriteButton" Style="{StaticResource IconButtonStyle}" Margin="4,0,0,0" ToolTip="Overwrite marked range at playhead" AutomationProperties.Name="Overwrite marked range">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L15,4 L15,14 L3,14 Z M6,7 L12,7 L12,11 L6,11 Z" />
+                                    </Button>
+                                    <ToggleButton x:Name="PreviewMuteToggle" Style="{StaticResource ToolToggleButtonStyle}" Margin="12,0,0,0" ToolTip="Mute source preview" AutomationProperties.Name="Mute source preview">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,7 L7,7 L11,4 L11,14 L7,11 L3,11 Z M13,7 L17,11 M17,7 L13,11" />
+                                    </ToggleButton>
+                                    <Slider x:Name="PreviewVolumeSlider" Width="72" Minimum="0" Maximum="1" Value="1" Margin="4,0" ToolTip="Preview volume" />
+                                    <Button x:Name="PreviewZoomButton" Style="{StaticResource IconButtonStyle}" ToolTip="Monitor zoom: Fit. Click to cycle." AutomationProperties.Name="Cycle monitor zoom">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M11.5,11.5 L16,16 M6,8 L10,8 M8,6 L8,10" />
+                                    </Button>
+                                    <ToggleButton x:Name="PreviewGuidesToggle" Style="{StaticResource ToolToggleButtonStyle}" Margin="4,0,0,0" ToolTip="Show canvas guides" AutomationProperties.Name="Show canvas guides">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M6,2 L6,16 M12,2 L12,16 M2,6 L16,6 M2,12 L16,12" />
+                                    </ToggleButton>
+                                    <Button x:Name="PreviewCanvasSettingsButton" Style="{StaticResource IconButtonStyle}" Margin="4,0,0,0" ToolTip="Canvas, frame rate, background, and layout guides" AutomationProperties.Name="Canvas settings">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L15,4 M6,4 L6,8 M3,9 L15,9 M12,9 L12,13 M3,14 L15,14 M8,14 L8,10" />
+                                    </Button>
+                                    <Button x:Name="PreviewSnapshotButton" Style="{StaticResource IconButtonStyle}" ToolTip="Save current frame" AutomationProperties.Name="Save preview snapshot">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,6 L6,6 L8,4 L12,4 L14,6 L16,6 L16,14 L3,14 Z M7,10 A3,3 0 1 0 13,10 A3,3 0 1 0 7,10" />
+                                    </Button>
                                 </StackPanel>
                             </ScrollViewer>
                         </Grid>
@@ -918,24 +1150,83 @@
                           ResizeDirection="Columns"
                           ResizeBehavior="PreviousAndNext" />
 
-            <Grid Grid.Column="4" Grid.Row="0" Grid.RowSpan="3">
+            <Grid x:Name="RightPanelHost" Grid.Column="4" Grid.Row="0" Grid.RowSpan="3" AutomationProperties.Name="Inspector window">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="44" />
                     <RowDefinition x:Name="RightInspectorRow" Height="*" />
                     <RowDefinition x:Name="RightTasksRow" Height="0" />
                 </Grid.RowDefinitions>
 
-                <Border x:Name="InspectorBorder"
+                <Border x:Name="InspectorWindowTitleBar"
                         Grid.Row="0"
+                        Background="{StaticResource EditorRailBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1,0,0,1">
+                    <Grid Margin="6,0,12,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="InspectorWindowDragHandle"
+                                Grid.Column="0"
+                                Width="28"
+                                Height="28"
+                                Cursor="SizeAll"
+                                Background="Transparent"
+                                ToolTip="Drag to move Inspector"
+                                AutomationProperties.Name="Move Inspector window">
+                            <TextBlock Text="⠿" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+                        </Border>
+                        <TextBlock x:Name="InspectorWindowTitleText"
+                                   Grid.Column="1"
+                                   Text="Inspector"
+                                   FontSize="11.5"
+                                   FontWeight="SemiBold"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False" />
+                        <Button x:Name="InspectorAddTabButton"
+                                Grid.Column="2"
+                                Style="{StaticResource IconButtonStyle}"
+                                Width="28"
+                                Height="28"
+                                Margin="0,0,4,0"
+                                ToolTip="Restore a closed Inspector or utility tab"
+                                AutomationProperties.Name="Add Inspector tab">
+                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M9,3 L9,15 M3,9 L15,9" />
+                        </Button>
+                        <Button x:Name="InspectorCloseWindowButton"
+                                Grid.Column="3"
+                                Style="{StaticResource IconButtonStyle}"
+                                Width="28"
+                                Height="28"
+                                ToolTip="Close Inspector window"
+                                AutomationProperties.Name="Close Inspector window">
+                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L13,13 M13,5 L5,13" />
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <Border x:Name="InspectorBorder"
+                        Grid.Row="1"
+                        AutomationProperties.Name="Inspector window"
                         Background="{StaticResource EditorPanelBrush}"
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="1,0,0,0">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*" />
-                            <RowDefinition Height="52" />
+                            <RowDefinition x:Name="InspectorFooterRow" Height="52" />
                         </Grid.RowDefinitions>
-                    <TabControl x:Name="InspectorTabs" Grid.Row="0" Background="Transparent">
-                        <TabItem Header="Inspector">
+                    <TabControl x:Name="InspectorTabs" Grid.Row="0" Background="Transparent" ClipToBounds="True">
+                        <TabControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel IsItemsHost="True" Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </TabControl.ItemsPanel>
+                        <TabItem x:Name="PropertiesInspectorTab" Header="Properties">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="40" />
@@ -960,74 +1251,195 @@
                                                             <Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                                             <TextBlock Text="Type" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                            <ComboBox x:Name="TransitionKindCombo" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,7" />
+                                                            <ComboBox x:Name="TransitionKindCombo" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,7" AutomationProperties.Name="Transition type" />
                                                             <TextBlock Text="Duration" Grid.Row="1" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                            <TextBox x:Name="TransitionDurationBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="1" Margin="0,0,6,7" />
+                                                            <TextBox x:Name="TransitionDurationBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="1" Margin="0,0,6,7" AutomationProperties.Name="Transition duration" />
                                                             <TextBlock Text="s" Grid.Row="1" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,7" />
                                                             <TextBlock Text="Alignment" Grid.Row="2" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                            <TextBox x:Name="TransitionAlignmentBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="2" Grid.Column="1" Margin="0,0,6,0" />
+                                                            <TextBox x:Name="TransitionAlignmentBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="2" Grid.Column="1" Margin="0,0,6,0" AutomationProperties.Name="Transition alignment" />
                                                             <TextBlock Text="%" Grid.Row="2" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                                                         </Grid>
                                                     </StackPanel>
                                                 </Border>
 
-                                                <Expander Header="Transform" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True">
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                                                        <TextBlock Text="Position X" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                        <TextBox x:Name="PositionXBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="1" Margin="0,0,6,7" ToolTip="Horizontal position" />
-                                                        <TextBlock Text="px" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,7" />
-                                                        <TextBlock Text="Position Y" Grid.Row="1" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                        <TextBox x:Name="PositionYBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="1" Margin="0,0,6,7" ToolTip="Vertical position" />
-                                                        <TextBlock Text="px" Grid.Row="1" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,7" />
-                                                        <TextBlock Text="Scale" Grid.Row="2" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                        <TextBox x:Name="ScaleBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="2" Grid.Column="1" Margin="0,0,6,7" />
-                                                        <TextBlock Text="x" Grid.Row="2" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,7" />
-                                                        <TextBlock Text="Rotation" Grid.Row="3" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                        <TextBox x:Name="RotationBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="3" Grid.Column="1" Margin="0,0,6,7" />
-                                                        <TextBlock Text="°" Grid.Row="3" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,7" />
-                                                        <TextBlock Text="Opacity" Grid.Row="4" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                        <TextBox x:Name="OpacityBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="4" Grid.Column="1" Margin="0,0,6,0" />
-                                                        <TextBlock Text="%" Grid.Row="4" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
-                                                    </Grid>
+                                                <Expander x:Name="TransformInspectorExpander" Header="Transform" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True">
+                                                    <StackPanel>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="Field layout" Style="{StaticResource InspectorFieldLabelStyle}" VerticalAlignment="Center" />
+                                                            <ComboBox x:Name="InspectorFieldColumnsCombo" Grid.Column="1" Width="104" SelectedIndex="1" AutomationProperties.Name="Inspector field columns">
+                                                                <ComboBoxItem Content="1 column" Tag="1" />
+                                                                <ComboBoxItem Content="2 columns" Tag="2" />
+                                                                <ComboBoxItem Content="3 columns" Tag="3" />
+                                                            </ComboBox>
+                                                        </Grid>
+                                                        <UniformGrid x:Name="TransformFieldsGrid" Columns="2" Margin="0,9,0,0">
+                                                            <StackPanel Margin="0,0,6,8">
+                                                                <TextBlock Text="Position X" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                                    <TextBox x:Name="PositionXBox" Style="{StaticResource InspectorNumericTextBoxStyle}" ToolTip="Horizontal position" AutomationProperties.Name="Horizontal position" />
+                                                                    <TextBlock Grid.Column="1" Text="px" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                            <StackPanel Margin="6,0,0,8">
+                                                                <TextBlock Text="Position Y" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                                    <TextBox x:Name="PositionYBox" Style="{StaticResource InspectorNumericTextBoxStyle}" ToolTip="Vertical position" AutomationProperties.Name="Vertical position" />
+                                                                    <TextBlock Grid.Column="1" Text="px" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                            <StackPanel Margin="0,0,6,8">
+                                                                <TextBlock Text="Scale X" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                                    <TextBox x:Name="ScaleXBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Horizontal scale" />
+                                                                    <TextBlock Grid.Column="1" Text="×" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                            <StackPanel Margin="6,0,0,8">
+                                                                <TextBlock Text="Scale Y" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                                    <TextBox x:Name="ScaleYBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Vertical scale" />
+                                                                    <TextBlock Grid.Column="1" Text="×" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                            <StackPanel Margin="6,0,0,8">
+                                                                <TextBlock Text="Rotation" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                                    <TextBox x:Name="RotationBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Rotation" />
+                                                                    <TextBlock Grid.Column="1" Text="°" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                            <StackPanel Margin="0,0,6,0">
+                                                                <TextBlock Text="Opacity" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                                    <TextBox x:Name="OpacityBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Opacity" />
+                                                                    <TextBlock Grid.Column="1" Text="%" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                        </UniformGrid>
+                                                        <Button x:Name="OpenAnimationEditorButton"
+                                                                Style="{StaticResource IconButtonStyle}"
+                                                                Margin="0,10,0,0"
+                                                                HorizontalAlignment="Stretch"
+                                                                ToolTip="Open animation graph"
+                                                                AutomationProperties.Name="Open animation graph"
+                                                                IsEnabled="False">
+                                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,13 C6,13 6,5 9,5 C12,5 12,11 15,11 M3,15 L15,15" />
+                                                        </Button>
+                                                    </StackPanel>
                                                 </Expander>
 
-                                                <Expander Header="Timing" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True">
+                                                <Expander x:Name="TextInspectorExpander" Header="Text &amp; Typography" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True" Visibility="Collapsed">
+                                                    <StackPanel>
+                                                        <TextBlock Text="Content" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                        <TextBox x:Name="TextContentBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="70" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="Text content" />
+                                                        <TextBlock Text="Font family" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,10,0,5" />
+                                                        <ComboBox x:Name="FontFamilyCombo" IsEditable="True" IsTextSearchEnabled="True" MinHeight="30" AutomationProperties.Name="Font family" />
+                                                        <Grid Margin="0,10,0,0">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="10" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock Text="Font size" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                                <TextBox x:Name="FontSizeBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Font size" />
+                                                            </StackPanel>
+                                                            <StackPanel Grid.Column="2">
+                                                                <TextBlock Text="Alignment" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                                <ComboBox x:Name="FontAlignCombo" MinHeight="30" AutomationProperties.Name="Text alignment">
+                                                                    <ComboBoxItem Content="Left" Tag="left" />
+                                                                    <ComboBoxItem Content="Center" Tag="center" />
+                                                                    <ComboBoxItem Content="Right" Tag="right" />
+                                                                </ComboBox>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                        <CheckBox x:Name="FontBoldToggle" Content="Bold" Margin="0,9,0,0" AutomationProperties.Name="Bold text" />
+                                                        <Grid Margin="0,10,0,0">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="10" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock Text="Fill color" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                                <TextBox x:Name="TextFillColorBox" Text="#FFFFFF" AutomationProperties.Name="Text fill color" />
+                                                            </StackPanel>
+                                                            <StackPanel Grid.Column="2">
+                                                                <TextBlock Text="Outline color" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                                <TextBox x:Name="TextOutlineColorBox" Text="#000000" AutomationProperties.Name="Text outline color" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                        <Grid Margin="0,10,0,0">
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="10" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock Text="Outline width" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                                <TextBox x:Name="TextOutlineWidthBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Text outline width" />
+                                                            </StackPanel>
+                                                            <StackPanel Grid.Column="2">
+                                                                <TextBlock Text="Shadow opacity %" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,5" />
+                                                                <TextBox x:Name="TextShadowOpacityBox" Style="{StaticResource InspectorNumericTextBoxStyle}" AutomationProperties.Name="Text shadow opacity" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                        <TextBlock Text="Shadow color" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,10,0,5" />
+                                                        <TextBox x:Name="TextShadowColorBox" Text="#000000" AutomationProperties.Name="Text shadow color" />
+                                                    </StackPanel>
+                                                </Expander>
+
+                                                <Expander x:Name="TimingInspectorExpander" Header="Timing" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True">
                                                     <StackPanel>
                                                         <Grid>
                                                             <Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                             <TextBlock Text="Speed" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                            <TextBox x:Name="SpeedBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="1" Margin="0,0,6,0" />
+                                                            <TextBox x:Name="SpeedBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="1" Margin="0,0,6,0" AutomationProperties.Name="Playback speed" />
                                                             <TextBlock Text="x" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                                                         </Grid>
-                                                        <CheckBox x:Name="ReverseToggle" Content="Reverse playback" Margin="78,9,0,0" />
+                                                        <CheckBox x:Name="ReverseToggle" Content="Reverse playback" Margin="78,9,0,0" AutomationProperties.Name="Reverse playback" />
                                                     </StackPanel>
                                                 </Expander>
 
-                                                <Expander Header="Color" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True">
+                                                <Expander x:Name="FadesInspectorExpander" Header="Fades" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True" Visibility="Collapsed">
+                                                    <StackPanel>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                                            <TextBlock Text="Fade in" Style="{StaticResource InspectorFieldLabelStyle}" />
+                                                            <TextBox x:Name="FadeInBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="1" Margin="0,0,6,8" AutomationProperties.Name="Fade in duration" />
+                                                            <TextBlock Text="s" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,8" />
+                                                            <TextBlock Text="Fade out" Grid.Row="1" Style="{StaticResource InspectorFieldLabelStyle}" />
+                                                            <TextBox x:Name="FadeOutBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="1" Margin="0,0,6,0" AutomationProperties.Name="Fade out duration" />
+                                                            <TextBlock Text="s" Grid.Row="1" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
+                                                        </Grid>
+                                                        <TextBlock Text="Fades affect every stream rendered by this item." Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" TextWrapping="Wrap" Margin="78,7,0,0" />
+                                                    </StackPanel>
+                                                </Expander>
+
+                                                <Expander x:Name="ColorInspectorExpander" Header="Color" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="True">
                                                     <StackPanel>
                                                         <Grid>
                                                             <Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="*" /><ColumnDefinition Width="58" /></Grid.ColumnDefinitions>
                                                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                                             <TextBlock Text="Brightness" Style="{StaticResource InspectorFieldLabelStyle}" />
                                                             <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="-1" Maximum="1" Value="0" Margin="0,0,7,7" AutomationProperties.Name="Brightness" />
-                                                            <TextBox x:Name="BrightnessBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="2" Margin="0,0,0,7" />
+                                                            <TextBox x:Name="BrightnessBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="2" Margin="0,0,0,7" AutomationProperties.Name="Brightness value" />
                                                             <TextBlock Text="Contrast" Grid.Row="1" Style="{StaticResource InspectorFieldLabelStyle}" />
                                                             <Slider x:Name="ContrastSlider" Grid.Row="1" Grid.Column="1" Minimum="-1" Maximum="3" Value="0" Margin="0,0,7,7" AutomationProperties.Name="Contrast" />
-                                                            <TextBox x:Name="ContrastBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="2" Margin="0,0,0,7" />
+                                                            <TextBox x:Name="ContrastBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="2" Margin="0,0,0,7" AutomationProperties.Name="Contrast value" />
                                                             <TextBlock Text="Saturation" Grid.Row="2" Style="{StaticResource InspectorFieldLabelStyle}" />
                                                             <Slider x:Name="SaturationSlider" Grid.Row="2" Grid.Column="1" Minimum="0" Maximum="4" Value="1" Margin="0,0,7,0" AutomationProperties.Name="Saturation" />
-                                                            <TextBox x:Name="SaturationBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="2" Grid.Column="2" />
+                                                            <TextBox x:Name="SaturationBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="2" Grid.Column="2" AutomationProperties.Name="Saturation value" />
                                                         </Grid>
-                                                        <CheckBox x:Name="BlackWhiteToggle" Content="Black and white" Margin="78,9,0,0" />
+                                                        <CheckBox x:Name="BlackWhiteToggle" Content="Black and white" Margin="78,9,0,0" AutomationProperties.Name="Black and white" />
                                                     </StackPanel>
                                                 </Expander>
 
-                                                <Expander Header="Stabilization" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="False">
+                                                <Expander x:Name="StabilizationInspectorExpander" Header="Stabilization" Style="{StaticResource InspectorExpanderStyle}" IsExpanded="False">
                                                     <StackPanel>
-                                                        <CheckBox x:Name="StabilizeToggle" Content="Enable stabilization" />
-                                                        <Button x:Name="AnalyzeStabilizationButton" Content="Analyze Motion" Margin="0,9,0,0" HorizontalAlignment="Stretch" />
+                                                        <CheckBox x:Name="StabilizeToggle" Content="Enable stabilization" AutomationProperties.Name="Enable stabilization" />
+                                                        <Button x:Name="AnalyzeStabilizationButton" Style="{StaticResource IconButtonStyle}" Margin="0,9,0,0" HorizontalAlignment="Stretch" ToolTip="Analyze motion for stabilization" AutomationProperties.Name="Analyze stabilization motion">
+                                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,12 L6,8 L9,11 L12,5 L15,9 M3,15 L15,15" />
+                                                        </Button>
                                                     </StackPanel>
                                                 </Expander>
                                             </StackPanel>
@@ -1039,35 +1451,75 @@
                                             <Path Data="M4,4 L16,4 L16,16 L4,16 Z M7,8 L13,8 M7,11 L12,11" Stroke="{StaticResource AccentHoverBrush}" StrokeThickness="1.5" Fill="Transparent" Stretch="Uniform" Margin="10" />
                                         </Border>
                                         <TextBlock Text="Select a timeline clip" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,11,0,0" />
-                                        <TextBlock Text="Transform, timing, color and audio properties will appear here." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="230" Margin="0,5,0,0" />
+                                        <TextBlock Text="Only controls supported by the selected video, audio, image, text, or adjustment item will appear." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="230" Margin="0,5,0,0" />
                                     </StackPanel>
                                 </Grid>
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="Effects">
+                        <TabItem x:Name="EffectsInspectorTab" Header="Effects">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <StackPanel Margin="14">
+                                <StackPanel x:Name="EffectsInspectorPanel" Margin="14">
                                     <TextBlock Text="Clip Effects" FontSize="12" FontWeight="SemiBold" />
                                     <TextBlock Text="Add and manage effects on the selected timeline clip." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,14" />
                                     <ComboBox x:Name="EffectCombo"
                                               Style="{StaticResource InspectorEffectComboStyle}"
-                                              DisplayMemberPath="Name" />
-                                    <Button x:Name="AddEffectButton" Content="Add Selected Effect" Margin="0,8,0,0" />
+                                              DisplayMemberPath="Name"
+                                              AutomationProperties.Name="Available effect" />
+                                    <Button x:Name="AddEffectButton" Style="{StaticResource PrimaryIconButtonStyle}" Margin="0,8,0,0" ToolTip="Add selected effect" AutomationProperties.Name="Add selected effect">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M9,2 L10.5,7.5 L16,9 L10.5,10.5 L9,16 L7.5,10.5 L2,9 L7.5,7.5 Z" />
+                                    </Button>
                                     <TextBlock Text="Applied Effects" Style="{StaticResource InspectorHeadingStyle}" Margin="0,18,0,8" />
                                     <ListBox x:Name="EffectList"
                                              MinHeight="130"
                                              Background="{StaticResource InputBrush}"
-                                             DisplayMemberPath="DisplayName" />
+                                             BorderBrush="{StaticResource BorderStrongBrush}"
+                                             BorderThickness="1"
+                                             DisplayMemberPath="DisplayName"
+                                             AutomationProperties.Name="Applied effects">
+                                        <ListBox.Template>
+                                            <ControlTemplate TargetType="ListBox">
+                                                <Border Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                                        CornerRadius="4">
+                                                    <ScrollViewer Padding="4">
+                                                        <ItemsPresenter />
+                                                    </ScrollViewer>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </ListBox.Template>
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                                <Setter Property="Background" Value="Transparent" />
+                                                <Setter Property="Padding" Value="8,6" />
+                                                <Setter Property="Margin" Value="0,0,0,2" />
+                                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter Property="Background" Value="{StaticResource SelectionBrush}" />
+                                                        <Setter Property="Foreground" Value="White" />
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                    </ListBox>
                                     <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <Button x:Name="EffectMoveUpButton" Content="Move Up" Margin="0,0,4,0" />
-                                        <Button x:Name="EffectMoveDownButton" Grid.Column="1" Content="Move Down" Margin="4,0" />
-                                        <Button x:Name="EffectRemoveButton" Grid.Column="2" Content="Remove" Margin="4,0,0,0" />
+                                        <Button x:Name="EffectMoveUpButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,4,0" ToolTip="Move selected effect up" AutomationProperties.Name="Move effect up">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,11 L9,6 L14,11 M4,14 L14,14" />
+                                        </Button>
+                                        <Button x:Name="EffectMoveDownButton" Grid.Column="1" Style="{StaticResource IconButtonStyle}" Margin="4,0" ToolTip="Move selected effect down" AutomationProperties.Name="Move effect down">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,7 L9,12 L14,7 M4,4 L14,4" />
+                                        </Button>
+                                        <Button x:Name="EffectRemoveButton" Grid.Column="2" Style="{StaticResource IconButtonStyle}" Margin="4,0,0,0" ToolTip="Remove selected effect" AutomationProperties.Name="Remove effect">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,9 L14,9" />
+                                        </Button>
                                     </Grid>
                                     <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
@@ -1075,9 +1527,15 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <Button x:Name="EffectToggleButton" Content="Disable" Margin="0,0,4,0" />
-                                        <Button x:Name="EffectDuplicateButton" Grid.Column="1" Content="Duplicate" Margin="4,0" />
-                                        <Button x:Name="EffectResetButton" Grid.Column="2" Content="Reset" Margin="4,0,0,0" />
+                                        <Button x:Name="EffectToggleButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,4,0" ToolTip="Disable selected effect" AutomationProperties.Name="Toggle selected effect">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M2,9 C5,4 13,4 16,9 C13,14 5,14 2,9 M7,9 A2,2 0 1 0 11,9 A2,2 0 1 0 7,9" />
+                                        </Button>
+                                        <Button x:Name="EffectDuplicateButton" Grid.Column="1" Style="{StaticResource IconButtonStyle}" Margin="4,0" ToolTip="Duplicate selected effect" AutomationProperties.Name="Duplicate effect">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M6,6 L15,6 L15,15 L6,15 Z M3,3 L12,3 L12,6 M3,3 L3,12 L6,12" />
+                                        </Button>
+                                        <Button x:Name="EffectResetButton" Grid.Column="2" Style="{StaticResource IconButtonStyle}" Margin="4,0,0,0" ToolTip="Reset selected effect" AutomationProperties.Name="Reset effect">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L2,8 L5,11 M2,8 L9,8 C13,8 15,11 14,14" />
+                                        </Button>
                                     </Grid>
                                     <TextBlock Text="Parameters" Style="{StaticResource InspectorHeadingStyle}" Margin="0,18,0,8" />
                                     <Border Background="{StaticResource InputBrush}"
@@ -1093,15 +1551,19 @@
                                         </StackPanel>
                                     </Border>
                                     <Button x:Name="EffectApplyParametersButton"
-                                            Content="Apply Effect Parameters"
-                                            Margin="0,8,0,0" />
+                                            Style="{StaticResource PrimaryIconButtonStyle}"
+                                            Margin="0,8,0,0"
+                                            ToolTip="Apply effect parameters"
+                                            AutomationProperties.Name="Apply effect parameters">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M3,9 L7,13 L15,5" />
+                                    </Button>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>
 
-                        <TabItem Header="Audio">
+                        <TabItem x:Name="AudioInspectorTab" Header="Audio">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <StackPanel>
+                                <StackPanel x:Name="AudioInspectorPanel">
                                     <Border Style="{StaticResource InspectorSectionStyle}">
                                         <StackPanel>
                                             <TextBlock Text="Audio" Style="{StaticResource InspectorHeadingStyle}" />
@@ -1109,21 +1571,23 @@
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="72" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                                 <TextBlock Text="Volume" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                <TextBox x:Name="VolumeBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="1" Margin="0,0,6,8" />
+                                                <TextBox x:Name="VolumeBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Column="1" Margin="0,0,6,8" AutomationProperties.Name="Audio volume" />
                                                 <TextBlock Text="%" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,0,8" />
                                                 <TextBlock Text="Pan" Grid.Row="1" Style="{StaticResource InspectorFieldLabelStyle}" />
-                                                <TextBox x:Name="PanBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="1" Margin="0,0,6,0" />
+                                                <TextBox x:Name="PanBox" Style="{StaticResource InspectorNumericTextBoxStyle}" Grid.Row="1" Grid.Column="1" Margin="0,0,6,0" AutomationProperties.Name="Audio pan" />
                                                 <TextBlock Text="%" Grid.Row="1" Grid.Column="2" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                                             </Grid>
                                             <TextBlock Text="Pan uses -100 for left, 0 for center, and 100 for right." Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" TextWrapping="Wrap" Margin="72,7,0,0" />
-                                            <Button Command="c:EditorCommands.ExtractAudio" Content="Extract Audio" Margin="0,12,0,0" />
+                                            <Button Command="c:EditorCommands.ExtractAudio" Style="{StaticResource IconButtonStyle}" Margin="0,12,0,0" ToolTip="Extract audio from selected clip" AutomationProperties.Name="Extract audio">
+                                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,5 C5,3 7,7 9,5 C11,3 13,7 15,5 M3,9 C5,7 7,11 9,9 C11,7 13,11 15,9 M3,13 C5,11 7,15 9,13 C11,11 13,15 15,13" />
+                                            </Button>
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>
                     </TabControl>
-                        <Border Grid.Row="1" Background="{StaticResource EditorRailBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="10,7">
+                        <Border x:Name="InspectorFooterBorder" Grid.Row="1" Background="{StaticResource EditorRailBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="10,7">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -1133,8 +1597,12 @@
                                     <TextBlock x:Name="InspectorDirtyText" Text="Select a clip to edit" Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Button x:Name="ResetInspectorButton" Style="{StaticResource CommandButtonStyle}" Content="Reset" Margin="0,0,6,0" IsEnabled="False" />
-                                    <Button x:Name="ApplyInspectorButton" Style="{StaticResource PrimaryButtonStyle}" Content="Apply" MinWidth="72" IsEnabled="False" />
+                                    <Button x:Name="ResetInspectorButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,6,0" ToolTip="Reset inspector changes" AutomationProperties.Name="Reset inspector" IsEnabled="False">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L2,8 L5,11 M2,8 L9,8 C13,8 15,11 14,14" />
+                                    </Button>
+                                    <Button x:Name="ApplyInspectorButton" Style="{StaticResource PrimaryIconButtonStyle}" ToolTip="Apply inspector changes" AutomationProperties.Name="Apply inspector" IsEnabled="False">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M3,9 L7,13 L15,5" />
+                                    </Button>
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -1142,130 +1610,208 @@
                 </Border>
 
                 <Border x:Name="TasksBorder"
-                        Grid.Row="1"
+                        Grid.Row="2"
                         Background="{StaticResource EditorPanelBrush}"
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="1,1,0,0"
                         Visibility="Collapsed">
-                    <TabControl>
-                        <TabItem x:Name="TasksTab" Header="Campaign">
-                            <Grid Margin="9">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="*" />
-                                </Grid.RowDefinitions>
-                                <StackPanel>
-                                    <TextBlock Text="Campaign brief" FontWeight="SemiBold" FontSize="11.5" Margin="0,0,0,5" />
-                                    <TextBox x:Name="CampaignDescriptionBox"
-                                             MinHeight="48"
-                                             MaxHeight="72"
-                                             AcceptsReturn="True"
-                                             TextWrapping="Wrap"
-                                             VerticalScrollBarVisibility="Auto"
-                                             ToolTip="Describe the campaign goal and editing direction"
-                                             AutomationProperties.Name="Campaign description" />
-                                </StackPanel>
-                                <Grid Grid.Row="1" Margin="0,8,0,7">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="NewTaskBox"
-                                             ToolTip="Enter a task"
-                                             AutomationProperties.Name="New campaign task" />
-                                    <Button x:Name="AddTaskButton"
-                                            Grid.Column="1"
-                                            Style="{StaticResource PrimaryButtonStyle}"
-                                            Content="Add"
-                                            MinWidth="58"
-                                            Margin="6,0,0,0" />
-                                </Grid>
-                                <Grid Grid.Row="2">
-                                    <ListBox x:Name="TaskList" Margin="0">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="Auto" />
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="Auto" />
-                                                    </Grid.ColumnDefinitions>
-                                                    <CheckBox IsChecked="{Binding IsCompleted, Mode=TwoWay}"
-                                                              VerticalAlignment="Center"
-                                                              AutomationProperties.Name="Mark task complete" />
-                                                    <TextBlock Grid.Column="1"
-                                                               Text="{Binding Title}"
-                                                               VerticalAlignment="Center"
-                                                               TextWrapping="Wrap"
-                                                               Margin="2,0,8,0">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsCompleted}" Value="True">
-                                                                        <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
-                                                                        <Setter Property="TextDecorations" Value="Strikethrough" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                    <Button Grid.Column="2"
-                                                            Style="{StaticResource IconButtonStyle}"
-                                                            Tag="{Binding Id}"
-                                                            Click="DeleteCampaignTask_Click"
-                                                            ToolTip="Delete task"
-                                                            AutomationProperties.Name="Delete task">
-                                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,5 L14,5 M7,5 L7,3 L11,3 L11,5 M6,7 L6,15 L12,15 L12,7" />
-                                                    </Button>
-                                                </Grid>
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                    </ListBox>
-                                    <TextBlock x:Name="TasksEmptyText"
-                                               Text="No campaign tasks yet"
-                                               Foreground="{StaticResource TextMutedBrush}"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"
-                                               IsHitTestVisible="False" />
-                                </Grid>
-                            </Grid>
-                        </TabItem>
-                        <TabItem x:Name="RenderQueueTab" Header="Activity">
+                    <TabControl x:Name="UtilityTabs">
+                        <TabItem x:Name="RenderQueueTab" Header="Queue">
                             <Grid>
                                 <ListBox x:Name="RenderQueueList" Margin="5" AutomationProperties.Name="Background activity log" />
                                 <TextBlock x:Name="RenderQueueEmptyText" Text="No background activity yet" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
                             </Grid>
                         </TabItem>
-                        <TabItem x:Name="MediaIntelligenceTab" Header="Intelligence">
-                            <DockPanel Margin="7">
-                                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,7">
-                                    <CheckBox x:Name="AnalyzeScenesToggle" Content="Scenes" IsChecked="True" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="AnalyzeTranscriptToggle" Content="Transcript" IsChecked="True" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="AnalyzeMusicToggle" Content="Audio + beats" IsChecked="True" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="AnalyzeGeminiToggle" Content="Visual understanding" Margin="0,0,6,5" />
-                                    <ComboBox x:Name="VisualProviderCombo" Width="112" SelectedIndex="0" Margin="0,0,9,5" ToolTip="Choose the visual-analysis provider" AutomationProperties.Name="Visual analysis provider">
-                                        <ComboBoxItem Content="Gemini" Tag="gemini" />
-                                        <ComboBoxItem Content="Qwen local" Tag="qwen" />
-                                    </ComboBox>
-                                    <CheckBox x:Name="AnalyzeOcrToggle" Content="OCR" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="AnalyzeAlignmentToggle" Content="Precise words" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="AnalyzeDiarizationToggle" Content="Speakers" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="AnalyzeAudioEventsToggle" Content="Sound events" Margin="0,0,9,5" />
-                                    <CheckBox x:Name="BuildEmbeddingsToggle" Content="Semantic index" Margin="0,0,9,5" />
-                                    <ComboBox x:Name="WhisperModelCombo" Width="92" SelectedIndex="0" Margin="0,0,6,5" ToolTip="Choose the speech transcription model" AutomationProperties.Name="Speech transcription model">
-                                        <ComboBoxItem Content="base" /><ComboBoxItem Content="small" /><ComboBoxItem Content="medium" />
-                                    </ComboBox>
-                                    <Button x:Name="RunMediaIntelligenceButton" Content="Analyze selected media" MinWidth="126" Margin="0,0,5,5" />
-                                    <Button x:Name="ApplyMediaIntelligenceButton" Content="Apply results" MinWidth="88" Margin="0,0,5,5" />
-                                    <Button x:Name="OpenMediaAnalysisButton" Content="Open results" MinWidth="88" Margin="0,0,9,5" />
-                                    <TextBox x:Name="MediaContextSearchBox" Width="200" MinHeight="29" Margin="0,0,5,5" ToolTip="Search analyzed scenes, speech, sound, and editing roles" AutomationProperties.Name="Search analyzed media context" />
-                                    <Button x:Name="SearchMediaContextButton" Content="Search analysis" MinWidth="96" Margin="0,0,5,5" />
-                                    <Button x:Name="FindHooksButton" Content="Find best hooks" MinWidth="98" Margin="0,0,0,5" />
-                                </WrapPanel>
-                                <Grid>
+                        <TabItem x:Name="MediaIntelligenceTab" Header="AI">
+                            <ScrollViewer x:Name="MediaIntelligenceScrollViewer"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          PanningMode="VerticalOnly">
+                            <DockPanel Margin="8">
+                                <Border DockPanel.Dock="Top"
+                                        Margin="0,0,0,8"
+                                        Padding="10"
+                                        Background="{StaticResource PanelRaisedBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="6">
+                                    <StackPanel>
+                                        <TextBlock Text="Analysis features" FontSize="11.5" FontWeight="SemiBold" Margin="0,0,0,8" />
+                                        <UniformGrid x:Name="MediaIntelligenceFeatureGrid" Columns="2" Margin="0,0,0,8">
+                                            <CheckBox x:Name="AnalyzeScenesToggle" Content="Scene detection" IsChecked="True" Margin="0,0,8,6" />
+                                            <CheckBox x:Name="AnalyzeTranscriptToggle" Content="Transcript" IsChecked="True" Margin="0,0,0,6" />
+                                            <CheckBox x:Name="AnalyzeMusicToggle" Content="Audio and beats" IsChecked="True" Margin="0,0,8,6" />
+                                            <CheckBox x:Name="AnalyzeGeminiToggle" Content="Visual understanding" Margin="0,0,0,6" />
+                                            <CheckBox x:Name="AnalyzeOcrToggle" Content="OCR" Margin="0,0,8,6" />
+                                            <CheckBox x:Name="AnalyzeAlignmentToggle" Content="Precise words" Margin="0,0,0,6" />
+                                            <CheckBox x:Name="AnalyzeDiarizationToggle" Content="Speakers" Margin="0,0,8,6" />
+                                            <CheckBox x:Name="AnalyzeAudioEventsToggle" Content="Sound events" Margin="0,0,0,6" />
+                                            <CheckBox x:Name="BuildEmbeddingsToggle" Content="Semantic index" Margin="0,0,8,0" />
+                                        </UniformGrid>
+                                        <UniformGrid x:Name="MediaIntelligenceModelGrid" Columns="2" Margin="0,0,0,8">
+                                            <StackPanel Margin="0,0,4,0">
+                                                <TextBlock Text="Visual provider" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                <ComboBox x:Name="VisualProviderCombo" SelectedIndex="0" ToolTip="Choose the visual-analysis provider" AutomationProperties.Name="Visual analysis provider">
+                                                    <ComboBoxItem Content="Gemini" Tag="gemini" />
+                                                    <ComboBoxItem Content="Qwen local" Tag="qwen" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                            <StackPanel Margin="4,0,0,0">
+                                                <TextBlock Text="Speech model" Style="{StaticResource InspectorFieldLabelStyle}" Margin="0,0,0,4" />
+                                                <ComboBox x:Name="WhisperModelCombo" SelectedIndex="0" ToolTip="Choose the speech transcription model" AutomationProperties.Name="Speech transcription model">
+                                                    <ComboBoxItem Content="Base" Tag="base" />
+                                                    <ComboBoxItem Content="Small" Tag="small" />
+                                                    <ComboBoxItem Content="Medium" Tag="medium" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                        </UniformGrid>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="MediaContextSearchBox" MinHeight="32" Margin="0,0,6,0" ToolTip="Search analyzed scenes, speech, sound, and editing roles" AutomationProperties.Name="Search analyzed media context" />
+                                            <Button x:Name="SearchMediaContextButton" Grid.Column="1" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,0" ToolTip="Search media analysis" AutomationProperties.Name="Search analysis">
+                                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M11.5,11.5 L16,16" />
+                                            </Button>
+                                            <Button x:Name="FindHooksButton" Grid.Column="2" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,0" ToolTip="Find strongest hook moments" AutomationProperties.Name="Find best hooks">
+                                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M9,2 L11,7 L16,7 L12,10 L14,15 L9,12 L4,15 L6,10 L2,7 L7,7 Z" />
+                                            </Button>
+                                            <Button x:Name="OpenMediaAnalysisButton" Grid.Column="3" Style="{StaticResource IconButtonStyle}" ToolTip="Open analysis output folder" AutomationProperties.Name="Open analysis results">
+                                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,4 L10,4 M10,4 L10,10 M10,4 L15,9 M3,8 L3,15 L10,15" />
+                                            </Button>
+                                        </Grid>
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button x:Name="RunMediaIntelligenceButton" Style="{StaticResource PrimaryIconButtonStyle}" ToolTip="Analyze selected media" AutomationProperties.Name="Analyze selected media">
+                                                <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M3,9 L6,9 L8,4 L11,14 L13,9 L16,9" />
+                                            </Button>
+                                            <Button x:Name="ApplyMediaIntelligenceButton" Grid.Column="2" Style="{StaticResource IconButtonStyle}" ToolTip="Apply media analysis results" AutomationProperties.Name="Apply analysis results">
+                                                <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,9 L7,13 L15,5" />
+                                            </Button>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                                <Grid MinHeight="140">
                                     <ListBox x:Name="MediaIntelligenceList" />
                                     <TextBlock x:Name="MediaIntelligenceEmptyText" Text="Select media, then run analysis" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+                                </Grid>
+                            </DockPanel>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem x:Name="ProductionWorkflowTab" Header="Workflow" Visibility="Collapsed">
+                            <DockPanel Margin="8">
+                                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,7">
+                                    <Button x:Name="WorkflowApproveButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Approve selected workflow stage" AutomationProperties.Name="Approve workflow stage">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,9 L7,13 L15,5" />
+                                    </Button>
+                                    <Button x:Name="WorkflowCompleteButton" Style="{StaticResource PrimaryIconButtonStyle}" Margin="0,0,5,5" ToolTip="Complete selected workflow stage" AutomationProperties.Name="Complete workflow stage">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M3,4 L15,4 L15,14 L3,14 Z M6,9 L8,11 L12,7" />
+                                    </Button>
+                                    <Button x:Name="WorkflowResetButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Reset selected workflow stage" AutomationProperties.Name="Reset workflow stage">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L2,8 L5,11 M2,8 L9,8 C13,8 15,11 14,14" />
+                                    </Button>
+                                    <Button x:Name="WorkflowRefreshButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,0,5" ToolTip="Refresh production workflow" AutomationProperties.Name="Refresh workflow">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,7 C5,3 13,3 15,7 M15,7 L12,5 M15,7 L13,10 M14,11 C12,15 4,15 3,11 M3,11 L6,13 M3,11 L5,8" />
+                                    </Button>
+                                </WrapPanel>
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <ListBox x:Name="WorkflowStageList" SelectionMode="Single" AutomationProperties.Name="Production workflow stages" />
+                                    <TextBlock x:Name="WorkflowStatusText" Grid.Row="1" Margin="2,6,2,0" Foreground="{StaticResource TextMutedBrush}" FontSize="10.5" TextWrapping="Wrap" />
+                                </Grid>
+                            </DockPanel>
+                        </TabItem>
+                        <TabItem x:Name="TranscriptEditorTab" Header="Transcript" Visibility="Collapsed">
+                            <DockPanel Margin="8">
+                                <StackPanel DockPanel.Dock="Top">
+                                    <ComboBox x:Name="TranscriptAssetCombo" MinHeight="30" Margin="0,0,0,6" AutomationProperties.Name="Analyzed media for transcript editing" />
+                                    <WrapPanel Margin="0,0,0,6">
+                                        <TextBox x:Name="TranscriptFilterBox" Width="150" MinHeight="29" Margin="0,0,5,5" ToolTip="Filter transcript text" AutomationProperties.Name="Filter transcript" />
+                                        <Button x:Name="TranscriptCreateClipButton" Style="{StaticResource PrimaryIconButtonStyle}" Margin="0,0,5,5" ToolTip="Create clip from selected transcript segments" AutomationProperties.Name="Create transcript clip">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M3,5 L12,5 L12,13 L3,13 Z M15,6 L15,14 M12,10 L18,10" />
+                                        </Button>
+                                        <Button x:Name="TranscriptCreateCaptionsButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Create captions from transcript" AutomationProperties.Name="Create captions">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L15,4 L15,14 L3,14 Z M5,8 C6,6 8,6 9,8 M5,10 C6,12 8,12 9,10 M10,8 C11,6 13,6 14,8 M10,10 C11,12 13,12 14,10" />
+                                        </Button>
+                                        <Button x:Name="TranscriptBestMomentsButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Select best transcript moments" AutomationProperties.Name="Best transcript moments">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M9,2 L11,7 L16,7 L12,10 L14,15 L9,12 L4,15 L6,10 L2,7 L7,7 Z" />
+                                        </Button>
+                                        <Button x:Name="TranscriptRemoveSilenceButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,0,5" ToolTip="Remove silence using transcript analysis" AutomationProperties.Name="Remove silence">
+                                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,5 L7,9 L3,13 M15,5 L11,9 L15,13 M7,9 L11,9 M8,4 L10,4 M8,14 L10,14" />
+                                        </Button>
+                                    </WrapPanel>
+                                </StackPanel>
+                                <Grid>
+                                    <ListBox x:Name="TranscriptSegmentList" SelectionMode="Extended" AutomationProperties.Name="Transcript segments" />
+                                    <TextBlock x:Name="TranscriptEmptyText" Text="Analyze media with transcription to edit by words and moments" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="250" IsHitTestVisible="False" />
+                                </Grid>
+                            </DockPanel>
+                        </TabItem>
+                        <TabItem x:Name="OutputVariantsTab" Header="Variants + QA" Visibility="Collapsed">
+                            <Grid Margin="8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <WrapPanel Margin="0,0,0,6">
+                                    <Button x:Name="AddPortraitVariantButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Add a 9:16 vertical social variant" AutomationProperties.Name="Add portrait variant">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,2 L13,2 L13,16 L5,16 Z M15,10 L15,16 M12,13 L18,13" />
+                                    </Button>
+                                    <Button x:Name="AddLandscapeVariantButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Add a 16:9 landscape variant" AutomationProperties.Name="Add landscape variant">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M2,5 L14,5 L14,13 L2,13 Z M16,10 L16,16 M13,13 L19,13" />
+                                    </Button>
+                                    <Button x:Name="AddSquareVariantButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Add a 1:1 square variant" AutomationProperties.Name="Add square variant">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,3 L13,3 L13,13 L3,13 Z M16,10 L16,16 M13,13 L19,13" />
+                                    </Button>
+                                    <Button x:Name="RenderVariantButton" Style="{StaticResource PrimaryIconButtonStyle}" Margin="0,0,5,5" ToolTip="Render selected output variant" AutomationProperties.Name="Render selected variant">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M5,3 L15,9 L5,15 Z" />
+                                    </Button>
+                                    <Button x:Name="RefreshVariantsButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,0,5" ToolTip="Refresh output variants" AutomationProperties.Name="Refresh variants">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,7 C5,3 13,3 15,7 M15,7 L12,5 M15,7 L13,10 M14,11 C12,15 4,15 3,11 M3,11 L6,13 M3,11 L5,8" />
+                                    </Button>
+                                </WrapPanel>
+                                <ListBox x:Name="OutputVariantList" Grid.Row="1" AutomationProperties.Name="Output variants" />
+                                <Grid Grid.Row="2" Margin="0,7,0,5">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Render receipts" Foreground="{StaticResource TextSecondaryBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <Button x:Name="OpenRenderReceiptButton" Grid.Column="1" Style="{StaticResource IconButtonStyle}" ToolTip="Open selected render receipt" AutomationProperties.Name="Open render receipt">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,2 L13,2 L16,5 L16,16 L4,16 Z M13,2 L13,6 L16,6 M7,9 L13,9 M7,12 L13,12" />
+                                    </Button>
+                                </Grid>
+                                <ListBox x:Name="RenderReceiptList" Grid.Row="3" AutomationProperties.Name="Render verification receipts" />
+                            </Grid>
+                        </TabItem>
+                        <TabItem x:Name="GeneratedCompositionsTab" Header="Compositions" Visibility="Collapsed">
+                            <DockPanel Margin="8">
+                                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,7">
+                                    <Button x:Name="RegisterRemotionButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Register a local Remotion composition" AutomationProperties.Name="Add Remotion composition">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,4 L12,4 L12,13 L3,13 Z M15,5 L15,15 M12,10 L18,10" />
+                                    </Button>
+                                    <Button x:Name="RegisterHyperFramesButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,5,5" ToolTip="Register a local HyperFrames composition" AutomationProperties.Name="Add HyperFrames composition">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,5 L7,5 L7,13 L3,13 Z M10,5 L14,5 L14,13 L10,13 Z M17,6 L17,14 M14,10 L20,10" />
+                                    </Button>
+                                    <Button x:Name="RenderCompositionButton" Style="{StaticResource PrimaryIconButtonStyle}" Margin="0,0,5,5" ToolTip="Render selected composition" AutomationProperties.Name="Render selected composition">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Stroke="White" Margin="0" Data="M5,3 L15,9 L5,15 Z" />
+                                    </Button>
+                                    <Button x:Name="OpenCompositionOutputButton" Style="{StaticResource IconButtonStyle}" Margin="0,0,0,5" ToolTip="Open selected composition output" AutomationProperties.Name="Open composition output">
+                                        <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,4 L10,4 M10,4 L10,10 M10,4 L15,9 M3,8 L3,15 L10,15" />
+                                    </Button>
+                                </WrapPanel>
+                                <Grid>
+                                    <ListBox x:Name="GeneratedCompositionList" AutomationProperties.Name="Generated composition adapters" />
+                                    <TextBlock x:Name="GeneratedCompositionEmptyText" Text="Register a local Remotion or HyperFrames project. Rushframe renders it as a verified local asset." Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="250" IsHitTestVisible="False" />
                                 </Grid>
                             </DockPanel>
                         </TabItem>
@@ -1273,41 +1819,141 @@
                 </Border>
             </Grid>
 
-            <!-- Timeline toolbar -->
-            <Border Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" Background="{StaticResource EditorRailBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,1,1">
-                <Grid Margin="9,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Style="{StaticResource CommandButtonStyle}" Command="c:EditorCommands.SplitClip" ToolTip="Split the selected clip at the playhead" AutomationProperties.Name="Split clip">
-                            <StackPanel Orientation="Horizontal"><Path Style="{StaticResource ToolbarIconStyle}" Data="M4,4 L14,14 M14,4 L4,14" /><TextBlock Text="Split" /></StackPanel>
+            <Grid x:Name="UtilityWindowHost"
+                  Grid.Column="0"
+                  Grid.Row="0"
+                  Visibility="Collapsed"
+                  AutomationProperties.Name="Utility window">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="44" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Border x:Name="UtilityWindowTitleBar"
+                        Grid.Row="0"
+                        Background="{StaticResource EditorRailBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1,0,1,1">
+                    <Grid Margin="6,0,12,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="UtilityWindowDragHandle"
+                                Grid.Column="0"
+                                Width="28"
+                                Height="28"
+                                Cursor="SizeAll"
+                                Background="Transparent"
+                                ToolTip="Drag to move the utility window"
+                                AutomationProperties.Name="Move utility window">
+                            <TextBlock Text="⠿" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+                        </Border>
+                        <TextBlock x:Name="UtilityWindowTitleText"
+                                   Grid.Column="1"
+                                   Text="Utilities"
+                                   FontSize="11.5"
+                                   FontWeight="SemiBold"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False" />
+                        <Button x:Name="UtilityCloseWindowButton"
+                                Grid.Column="2"
+                                Style="{StaticResource IconButtonStyle}"
+                                Width="28"
+                                Height="28"
+                                Visibility="Collapsed"
+                                ToolTip="Close utility window and its open tabs"
+                                AutomationProperties.Name="Close utility window">
+                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L13,13 M13,5 L5,13" />
                         </Button>
-                        <ToggleButton x:Name="RippleToggle" Style="{StaticResource ToolToggleButtonStyle}" Content="Ripple" IsChecked="False" ToolTip="Close gaps after supported edits" Margin="6,0,4,0" AutomationProperties.Name="Ripple editing" />
-                        <ToggleButton x:Name="SnapToggle" Style="{StaticResource ToolToggleButtonStyle}" Content="Snap" IsChecked="True" ToolTip="Snap clips and markers" Margin="0,0,8,0" AutomationProperties.Name="Timeline snapping" />
-                        <Button Style="{StaticResource CommandButtonStyle}" Command="c:EditorCommands.AddText" ToolTip="Add a text clip" AutomationProperties.Name="Add text">
-                            <StackPanel Orientation="Horizontal"><Path Style="{StaticResource ToolbarIconStyle}" Data="M3,3 L15,3 M9,3 L9,15 M6,15 L12,15" /><TextBlock Text="Text" /></StackPanel>
-                        </Button>
-                        <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.Duplicate" ToolTip="Duplicate selected clip" AutomationProperties.Name="Duplicate selected clip">
-                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L15,5 L15,15 L5,15 Z M2,2 L12,2 L12,5 M2,2 L2,12 L5,12" />
-                        </Button>
-                        <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.DeleteClip" ToolTip="Delete selected clip" AutomationProperties.Name="Delete selected clip">
-                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,5 L14,5 M7,5 L7,3 L11,3 L11,5 M6,7 L6,15 L12,15 L12,7" />
-                        </Button>
-                        <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.AddMarker" ToolTip="Add marker at the playhead" AutomationProperties.Name="Add timeline marker">
-                            <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,2 L14,2 L14,10 L9.5,10 L6,14 L6,10 L5,10 Z" />
-                        </Button>
-                    </StackPanel>
-                    </ScrollViewer>
-                    <StackPanel x:Name="TimelineZoomControls" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Background="{StaticResource EditorRailBrush}" Margin="8,0,0,0">
-                        <Path Data="M2,9 A7,7 0 1 0 16,9 A7,7 0 1 0 2,9 M7,9 L11,9" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.3" Width="15" Height="15" Stretch="Uniform" Margin="0,0,8,0" />
-                        <Slider x:Name="ZoomSlider" Width="118" Minimum="0.1" Maximum="10" Value="1" TickFrequency="0.1" AutomationProperties.Name="Timeline zoom" />
-                        <Path Data="M2,9 A7,7 0 1 0 16,9 A7,7 0 1 0 2,9 M6,9 L12,9 M9,6 L9,12" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.3" Width="15" Height="15" Stretch="Uniform" Margin="8,0,0,0" />
-                    </StackPanel>
-                </Grid>
-            </Border>
+                    </Grid>
+                </Border>
+                <ContentControl x:Name="UtilityWindowContentHost" Grid.Row="1" />
+            </Grid>
+
+            <!-- Timeline window -->
+            <Grid x:Name="TimelineWindow"
+                  Grid.Column="0"
+                  Grid.ColumnSpan="3"
+                  Grid.Row="2"
+                  Grid.RowSpan="1"
+                  AutomationProperties.Name="Timeline window">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="46" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Border x:Name="TimelineWindowTitleBar"
+                        Grid.Row="0"
+                        Background="{StaticResource EditorRailBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,1,1,1">
+                    <Grid x:Name="TimelineToolbarBorder" Margin="5,0,7,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="TimelineWindowDragHandle"
+                                Grid.Column="0"
+                                Width="28"
+                                Height="28"
+                                Cursor="SizeAll"
+                                Background="Transparent"
+                                ToolTip="Drag to move Timeline"
+                                AutomationProperties.Name="Move Timeline window">
+                            <TextBlock Text="⠿" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}" />
+                        </Border>
+                        <TextBlock x:Name="TimelineWindowTitleText"
+                                   Grid.Column="1"
+                                   Text="Timeline"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Margin="6,0,10,0"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False" />
+                        <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.SplitClip" ToolTip="Split the selected clip at the playhead" AutomationProperties.Name="Split clip">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Data="M4,4 A2,2 0 1 0 8,4 A2,2 0 1 0 4,4 M4,14 A2,2 0 1 0 8,14 A2,2 0 1 0 4,14 M7.5,5.5 L15,13 M7.5,12.5 L15,5" />
+                                </Button>
+                                <ToggleButton x:Name="RippleToggle" Style="{StaticResource ToolToggleButtonStyle}" IsChecked="False" ToolTip="Close gaps after supported edits" Margin="6,0,4,0" AutomationProperties.Name="Ripple editing">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M3,5 L7,9 L3,13 M15,5 L11,9 L15,13 M7,9 L11,9" />
+                                </ToggleButton>
+                                <ToggleButton x:Name="SnapToggle" Style="{StaticResource ToolToggleButtonStyle}" IsChecked="True" ToolTip="Snap clips and markers" Margin="0,0,8,0" AutomationProperties.Name="Timeline snapping">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,3 L4,10 C4,15 14,15 14,10 L14,3 M4,7 L8,7 M10,7 L14,7" />
+                                </ToggleButton>
+                                <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.AddText" ToolTip="Add a text clip" AutomationProperties.Name="Add text">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Data="M3,3 L15,3 M9,3 L9,15 M6,15 L12,15" />
+                                </Button>
+                                <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.Duplicate" ToolTip="Duplicate selected clip" AutomationProperties.Name="Duplicate selected clip">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,5 L15,5 L15,15 L5,15 Z M2,2 L12,2 L12,5 M2,2 L2,12 L5,12" />
+                                </Button>
+                                <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.DeleteClip" ToolTip="Delete selected clip" AutomationProperties.Name="Delete selected clip">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M4,5 L14,5 M7,5 L7,3 L11,3 L11,5 M6,7 L6,15 L12,15 L12,7" />
+                                </Button>
+                                <Button Style="{StaticResource IconButtonStyle}" Command="c:EditorCommands.AddMarker" ToolTip="Add marker at the playhead" AutomationProperties.Name="Add timeline marker">
+                                    <Path Style="{StaticResource ToolbarIconStyle}" Margin="0" Data="M5,2 L5,16 M5,3 L13,3 L11,7 L13,11 L5,11 M15,12 L15,17 M12.5,14.5 L17.5,14.5" />
+                                </Button>
+                            </StackPanel>
+                        </ScrollViewer>
+                        <StackPanel x:Name="TimelineZoomControls" Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Background="{StaticResource EditorRailBrush}" Margin="8,0,0,0">
+                            <Path Data="M2,9 A7,7 0 1 0 16,9 A7,7 0 1 0 2,9 M7,9 L11,9" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.3" Width="15" Height="15" Stretch="Uniform" Margin="0,0,8,0" />
+                            <Slider x:Name="ZoomSlider" Width="118" Minimum="0.1" Maximum="10" Value="1" TickFrequency="0.1" AutomationProperties.Name="Timeline zoom" />
+                            <Path Data="M2,9 A7,7 0 1 0 16,9 A7,7 0 1 0 2,9 M6,9 L12,9 M9,6 L9,12" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.3" Width="15" Height="15" Stretch="Uniform" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <Border x:Name="TimelineBorder"
+                        Grid.Row="1"
+                        Background="{StaticResource ChromeBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,0,1,0">
+                    <ContentControl x:Name="TimelineHost" />
+                </Border>
+            </Grid>
 
             <GridSplitter x:Name="PreviewTimelineSplitter"
                           Grid.Column="0"
@@ -1319,30 +1965,219 @@
                           ResizeDirection="Rows"
                           ResizeBehavior="PreviousAndNext" />
 
-            <!-- Timeline canvas -->
-            <Border x:Name="TimelineBorder"
-                    Grid.Column="0"
-                    Grid.ColumnSpan="3"
-                    Grid.Row="2"
-                    Background="{StaticResource ChromeBrush}"
-                    BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="0,0,1,0">
-                <ContentControl x:Name="TimelineHost" />
-            </Border>
-
             <GridSplitter x:Name="TimelineTasksSplitter" Visibility="Collapsed" />
+
+            <Canvas x:Name="PanelDockOverlay"
+                    Grid.Column="0"
+                    Grid.ColumnSpan="5"
+                    Grid.Row="0"
+                    Grid.RowSpan="3"
+                    Panel.ZIndex="200"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed">
+                <Border x:Name="PanelDockTargetHighlight"
+                        Background="#338B5CF6"
+                        BorderBrush="{StaticResource AccentHoverBrush}"
+                        BorderThickness="2"
+                        CornerRadius="6" />
+                <Border x:Name="PanelDockDragBadge"
+                        Padding="10,5"
+                        Background="{StaticResource PanelRaisedBrush}"
+                        BorderBrush="{StaticResource AccentBrush}"
+                        BorderThickness="1"
+                        CornerRadius="5">
+                    <TextBlock x:Name="PanelDockDragLabel" FontSize="11" FontWeight="SemiBold" />
+                </Border>
+            </Canvas>
         </Grid>
 
         <Border Grid.Row="2" Background="{StaticResource EditorHeaderBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
             <Grid Margin="10,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" FontSize="10.5" TextTrimming="CharacterEllipsis" />
-                <ProgressBar x:Name="OperationProgressBar" Grid.Column="1" Width="96" Height="5" Margin="10,0" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Current operation progress" />
-                <Button x:Name="CancelOperationButton" Grid.Column="2" Content="Cancel" MinHeight="22" Padding="8,1" Margin="0,0,10,0" Visibility="Collapsed" AutomationProperties.Name="Cancel current operation" />
+                <ProgressBar x:Name="OperationProgressBar"
+                             Grid.Column="1"
+                             Width="132"
+                             Height="8"
+                             Margin="10,0,8,0"
+                             IsIndeterminate="True"
+                             Style="{StaticResource OperationProgressBarStyle}"
+                             Visibility="Collapsed"
+                             AutomationProperties.Name="Current operation progress" />
+                <Button x:Name="CancelOperationButton"
+                        Grid.Column="2"
+                        Content="×"
+                        Style="{StaticResource IconButtonStyle}"
+                        MinHeight="26"
+                        Margin="0,0,10,0"
+                        ToolTip="Cancel current operation"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Cancel current operation" />
                 <TextBlock x:Name="LocalEditingStatusText" Grid.Column="3" Text="Rushframe — Local editing" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" FontSize="10.5" />
                 <TextBlock x:Name="AutosaveStatusText" Grid.Column="4" Text="Autosave enabled" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="10.5" />
             </Grid>
         </Border>
+
+        <Grid x:Name="GlobalFunctionSearchOverlay"
+              Grid.RowSpan="3"
+              Panel.ZIndex="100"
+              Background="#B20A0710"
+              Visibility="Collapsed">
+            <Button x:Name="GlobalFunctionSearchBackdrop"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Focusable="False"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch" />
+            <Border Width="520"
+                    MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+                    MaxHeight="430"
+                    Margin="20"
+                    Padding="14"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Background="{StaticResource PanelRaisedBrush}"
+                    BorderBrush="{StaticResource BorderStrongBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Border Margin="0,0,0,10"
+                            MinHeight="42"
+                            Background="{StaticResource InputBrush}"
+                            BorderBrush="{StaticResource AccentBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="58" />
+                            </Grid.ColumnDefinitions>
+                            <Path Grid.Column="0"
+                                  Width="15"
+                                  Height="15"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center"
+                                  Stroke="{StaticResource TextMutedBrush}"
+                                  StrokeThickness="1.5"
+                                  Fill="Transparent"
+                                  Data="M3,8 A5,5 0 1 0 13,8 A5,5 0 1 0 3,8 M11.5,11.5 L16,16"
+                                  IsHitTestVisible="False" />
+                            <TextBox x:Name="GlobalFunctionSearchBox"
+                                     Grid.Column="1"
+                                     Style="{x:Null}"
+                                     MinHeight="40"
+                                     Padding="0"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Foreground="{StaticResource TextBrush}"
+                                     CaretBrush="{StaticResource TextBrush}"
+                                     FontSize="14"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="Search commands and functions"
+                                     AutomationProperties.Name="Search all functions" />
+                            <TextBlock Grid.Column="2"
+                                       Text="Ctrl+K"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextMutedBrush}"
+                                       FontSize="10.5"
+                                       IsHitTestVisible="False" />
+                        </Grid>
+                    </Border>
+                    <TextBlock x:Name="GlobalFunctionSearchHint"
+                               Grid.Row="1"
+                               Margin="2,0,0,8"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="Type a command name"
+                               FontSize="11" />
+                    <Grid Grid.Row="2">
+                        <ListBox x:Name="GlobalFunctionSearchResults"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 MaxHeight="320"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="12,8" />
+                                    <Setter Property="Margin" Value="0,0,0,4" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="ItemChrome"
+                                                        Padding="{TemplateBinding Padding}"
+                                                        Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                                        CornerRadius="6">
+                                                    <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                      VerticalAlignment="Center" />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource PanelHoverBrush}" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
+                                                        <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter Property="Opacity" Value="0.45" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       FontSize="12.5"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Category}"
+                                                       Margin="0,2,0,0"
+                                                       Foreground="{StaticResource TextMutedBrush}"
+                                                       FontSize="10.5" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding Shortcut}"
+                                                   Margin="14,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextMutedBrush}"
+                                                   FontSize="10.5" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock x:Name="GlobalFunctionSearchEmptyText"
+                                   Text="No matching commands"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Visibility="Collapsed"
+                                   IsHitTestVisible="False" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
     </Border>
 </Window>

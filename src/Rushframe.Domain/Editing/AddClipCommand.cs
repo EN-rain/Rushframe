@@ -12,6 +12,8 @@ public sealed class AddClipCommand : IEditCommand
         var track = sequence.Tracks.FirstOrDefault(t => t.Id == TrackId);
         if (track == null)
             return EditResult.Fail(new TrackNotFoundError(TrackId));
+        if (track.Locked)
+            return EditResult.Fail("Track is locked");
 
         track.Items.Add(Item);
         return EditResult.Ok();

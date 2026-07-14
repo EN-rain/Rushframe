@@ -26,10 +26,14 @@ public sealed class EditMarkerCommand : IEditCommand
     public required MarkerId MarkerId { get; init; }
     public required string NewLabel { get; init; }
     public required MediaTime NewTime { get; init; }
+    public string? NewNote { get; init; }
     public string? NewColor { get; init; }
+    public MediaTime NewDuration { get; init; }
 
     private string? _oldLabel;
+    private string? _oldNote;
     private MediaTime _oldTime;
+    private MediaTime _oldDuration;
     private string? _oldColor;
 
     public EditResult Execute(Sequence sequence)
@@ -38,11 +42,15 @@ public sealed class EditMarkerCommand : IEditCommand
         if (marker == null) return EditResult.Fail("Marker not found");
 
         _oldLabel = marker.Label;
+        _oldNote = marker.Note;
         _oldTime = marker.Time;
+        _oldDuration = marker.Duration;
         _oldColor = marker.Color;
 
         marker.Label = NewLabel;
+        marker.Note = NewNote;
         marker.Time = NewTime;
+        marker.Duration = NewDuration;
         marker.Color = NewColor;
         return EditResult.Ok();
     }
@@ -53,7 +61,9 @@ public sealed class EditMarkerCommand : IEditCommand
         if (marker == null) return EditResult.Fail("Marker not found");
 
         marker.Label = _oldLabel ?? marker.Label;
+        marker.Note = _oldNote;
         marker.Time = _oldTime;
+        marker.Duration = _oldDuration;
         marker.Color = _oldColor;
         return EditResult.Ok();
     }

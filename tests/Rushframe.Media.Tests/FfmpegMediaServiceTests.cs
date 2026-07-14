@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Rushframe.Domain;
+using Rushframe.Infrastructure;
+using Rushframe.Media.Abstractions;
 using Rushframe.Media.Native;
 
 namespace Rushframe.Media.Tests;
@@ -15,6 +17,15 @@ public sealed class FfmpegMediaServiceTests : IDisposable
         Directory.CreateDirectory(_root);
         _ffmpegPath = ResolveFfmpeg();
         _service = new FfmpegMediaService(_ffmpegPath);
+    }
+
+    [Fact]
+    public void EffectRegistry_AllListedEffectsHaveFinalRendererSupport()
+    {
+        var registry = new EffectRegistry();
+        var listed = registry.GetAll().Select(effect => effect.EffectTypeId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Empty(listed.Except(FfmpegMediaService.SupportedEffectTypeIds, StringComparer.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -46,6 +57,66 @@ public sealed class FfmpegMediaServiceTests : IDisposable
         Assert.True(new FileInfo(thumb).Length > 0);
         Assert.True(new FileInfo(proxy).Length > 0);
         Assert.True(new FileInfo(waveform).Length > 0);
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task GenerateWaveformPeaksAsync_LongEnoughAudio_ReturnsRequestedBoundedPeakSet()
+    {
+        var source = await CreateToneAsync();
+
+        var peaks = await _service.GenerateWaveformPeaksAsync(source, peakCount: 257);
+
+        Assert.Equal(257, peaks.Count);
+        Assert.All(peaks, peak => Assert.InRange(peak, 0f, 1f));
+        Assert.Contains(peaks, peak => peak > 0.05f);
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineRangeAsync_RendersOnlyRequestedChunkDuration()
+    {
+        var video = await CreateVideoWithAudioAsync();
+        var output = Path.Combine(_root, "timeline-range.mp4");
+        var project = new Project();
+        var asset = new MediaAsset
+        {
+            Kind = MediaKind.Video,
+            OriginalPath = video,
+            RelativeProjectPath = video,
+            Duration = MediaTime.FromSeconds(2),
+        };
+        project.MediaLibrary.Add(asset);
+        var sequence = project.MainSequence!;
+        sequence.Width = 320;
+        sequence.Height = 240;
+        sequence.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Video,
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Clip,
+                    MediaAssetId = asset.Id,
+                    Duration = MediaTime.FromSeconds(2),
+                    SourceDuration = MediaTime.FromSeconds(2),
+                },
+            },
+        });
+
+        await _service.ExportTimelineRangeAsync(
+            project,
+            sequence,
+            output,
+            startSeconds: 0.5,
+            durationSeconds: 0.75,
+            outputWidth: 320,
+            outputHeight: 240);
+        var probe = await _service.ProbeAsync(output);
+
+        Assert.True(File.Exists(output));
+        Assert.InRange(probe.Duration.TotalSeconds, 0.60, 1.00);
     }
 
     [Fact]
@@ -90,6 +161,8 @@ public sealed class FfmpegMediaServiceTests : IDisposable
                     Duration = MediaTime.FromSeconds(2),
                     SourceDuration = MediaTime.FromSeconds(2),
                     Volume = 0.8,
+                    FadeInDuration = MediaTime.FromSeconds(0.2),
+                    FadeOutDuration = MediaTime.FromSeconds(0.3),
                 },
             },
         });
@@ -100,6 +173,204 @@ public sealed class FfmpegMediaServiceTests : IDisposable
         Assert.True(File.Exists(output));
         Assert.True(probe.HasVideo);
         Assert.True(probe.HasAudio);
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_CustomLandscapeDimensions_UsesRequestedFrameSize()
+    {
+        var video = await CreateVideoWithAudioAsync();
+        var output = Path.Combine(_root, "landscape.mp4");
+        var project = new Project();
+        var asset = new MediaAsset { Kind = MediaKind.Video, OriginalPath = video, RelativeProjectPath = video, Duration = MediaTime.FromSeconds(2) };
+        project.MediaLibrary.Add(asset);
+        var seq = project.MainSequence!;
+        seq.Width = 1080;
+        seq.Height = 1920;
+        seq.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Video,
+            Name = "V1",
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Clip,
+                    MediaAssetId = asset.Id,
+                    Duration = MediaTime.FromSeconds(2),
+                    SourceDuration = MediaTime.FromSeconds(2),
+                },
+            },
+        });
+
+        await _service.ExportTimelineAsync(project, seq, output, outputWidth: 1280, outputHeight: 720);
+        var probe = await _service.ProbeAsync(output);
+        var videoStream = Assert.Single(probe.Streams, stream => stream.Kind == MediaStreamKind.Video);
+
+        Assert.Equal(1280, videoStream.Width);
+        Assert.Equal(720, videoStream.Height);
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_LayeredComposition_RendersAdvancedFeatures()
+    {
+        var video = await CreateVideoWithAudioAsync();
+        var image = await CreateImageAsync();
+        var output = Path.Combine(_root, "advanced-composition.mp4");
+        var project = new Project();
+        var videoAsset = new MediaAsset { Kind = MediaKind.Video, OriginalPath = video, RelativeProjectPath = video, Duration = MediaTime.FromSeconds(2) };
+        var imageAsset = new MediaAsset { Kind = MediaKind.Image, OriginalPath = image, RelativeProjectPath = image, Duration = MediaTime.FromSeconds(2) };
+        project.MediaLibrary.Add(videoAsset);
+        project.MediaLibrary.Add(imageAsset);
+
+        var sequence = project.MainSequence!;
+        sequence.Width = 320;
+        sequence.Height = 240;
+        sequence.Background = new CanvasBackground
+        {
+            Kind = CanvasBackgroundKind.LinearGradient,
+            PrimaryColor = "#101020",
+            SecondaryColor = "#502080",
+            GradientAngleDegrees = 35,
+        };
+        var videoTrack = new Track { Kind = TrackKind.Video, Name = "V1", Order = 0 };
+        var first = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            MediaAssetId = videoAsset.Id,
+            TimelineStart = MediaTime.Zero,
+            Duration = MediaTime.FromSeconds(1.2),
+            SourceDuration = MediaTime.FromSeconds(1.2),
+        };
+        var second = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            MediaAssetId = videoAsset.Id,
+            TimelineStart = MediaTime.FromSeconds(1.2),
+            Duration = MediaTime.FromSeconds(1.2),
+            SourceStart = MediaTime.FromSeconds(0.4),
+            SourceDuration = MediaTime.FromSeconds(1.6),
+        };
+        videoTrack.Items.Add(first);
+        videoTrack.Items.Add(second);
+        sequence.Tracks.Add(videoTrack);
+        sequence.Transitions.Add(new Transition
+        {
+            LeftItemId = first.Id,
+            RightItemId = second.Id,
+            Kind = TransitionKind.CrossDissolve,
+            Duration = MediaTime.FromSeconds(0.4),
+        });
+
+        var overlayTrack = new Track { Kind = TrackKind.Overlay, Name = "O1", Order = 1 };
+        var overlay = new TimelineItem
+        {
+            Kind = ItemKind.Image,
+            MediaAssetId = imageAsset.Id,
+            TimelineStart = MediaTime.FromSeconds(0.2),
+            Duration = MediaTime.FromSeconds(1.8),
+            SourceDuration = MediaTime.FromSeconds(1.8),
+            Opacity = 0.9,
+        };
+        overlay.Transform.ScaleX = 0.7;
+        overlay.Transform.ScaleY = 0.7;
+        overlay.Masks.Add(new Mask { Shape = MaskShape.Ellipse, ScaleX = 0.9, ScaleY = 0.9, Feather = 8 });
+        overlay.AnimationChannels.Add(new AnimationChannel
+        {
+            PropertyName = AnimationPropertyNames.PositionX,
+            DefaultValue = -60,
+            Keyframes =
+            {
+                new Keyframe { Time = MediaTime.Zero, Value = -60, Interpolation = InterpolationType.Bezier },
+                new Keyframe { Time = MediaTime.FromSeconds(1.8), Value = 60 },
+            },
+        });
+        overlayTrack.Items.Add(overlay);
+        overlayTrack.Items.Add(new TimelineItem
+        {
+            Kind = ItemKind.AdjustmentLayer,
+            TimelineStart = MediaTime.FromSeconds(0.7),
+            Duration = MediaTime.FromSeconds(0.5),
+            Effects = { new EffectInstance { EffectTypeId = "mono", Enabled = true } },
+        });
+        sequence.Tracks.Add(overlayTrack);
+
+        sequence.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Text,
+            Name = "T1",
+            Order = 2,
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Text,
+                    TimelineStart = MediaTime.FromSeconds(0.1),
+                    Duration = MediaTime.FromSeconds(2),
+                    TextContent = "Rushframe's exact preview",
+                    FontSize = 28,
+                    FontFamily = "Arial",
+                    FontBold = true,
+                    FontAlign = "right",
+                    FillColor = "#FFFFFF",
+                    OutlineColor = "#000000",
+                    OutlineWidth = 2,
+                    ShadowColor = "#000000",
+                    ShadowOpacity = 0.6,
+                    ShadowOffsetX = 3,
+                    ShadowOffsetY = 3,
+                    ShadowBlur = 2,
+                    FadeInDuration = MediaTime.FromSeconds(0.2),
+                    Effects = { new EffectInstance { EffectTypeId = "brightness", Parameters = { ["amount"] = 0.05 } } },
+                    Transform = { PositionX = 20, PositionY = 20, ScaleX = 0.85, ScaleY = 1.1, RotationDegrees = 8 },
+                },
+            },
+        });
+
+        await _service.ExportTimelineAsync(project, sequence, output);
+        var probe = await _service.ProbeAsync(output);
+
+        Assert.True(new FileInfo(output).Length > 0);
+        Assert.True(probe.HasVideo);
+        Assert.True(probe.HasAudio);
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_BuiltInShapeSticker_RendersWithoutExternalAsset()
+    {
+        var output = Path.Combine(_root, "builtin-shape.mp4");
+        var project = new Project();
+        var sequence = project.MainSequence!;
+        sequence.Width = 320;
+        sequence.Height = 240;
+        sequence.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Overlay,
+            Name = "Shapes",
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Sticker,
+                    StickerId = "builtin.shape.star",
+                    TimelineStart = MediaTime.Zero,
+                    Duration = MediaTime.FromSeconds(1),
+                    SourceDuration = MediaTime.FromSeconds(1),
+                    FillColor = "#FFD54A",
+                    OutlineColor = "#201000",
+                    OutlineWidth = 2,
+                    Transform = { ScaleX = 0.5, ScaleY = 0.5, RotationDegrees = 12 },
+                },
+            },
+        });
+
+        await _service.ExportTimelineAsync(project, sequence, output);
+        var probe = await _service.ProbeAsync(output);
+
+        Assert.True(new FileInfo(output).Length > 0);
+        Assert.True(probe.HasVideo);
     }
 
     [Fact]
@@ -129,10 +400,59 @@ public sealed class FfmpegMediaServiceTests : IDisposable
             _service.GenerateProxyAsync(new(source, output, 120), cancellationToken: cts.Token));
     }
 
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task VerifyExportAsync_ValidVideo_DecodesAndCapturesEvidence()
+    {
+        var source = await CreateVideoWithAudioAsync();
+        var evidence = Path.Combine(_root, "verification-evidence");
+
+        var report = await _service.VerifyExportAsync(
+            source,
+            expectedWidth: 160,
+            expectedHeight: 120,
+            expectedDurationSeconds: 2,
+            evidenceDirectory: evidence);
+
+        Assert.NotEqual(MediaExportVerificationStatus.Failed, report.Status);
+        Assert.True(report.FullDecodePassed);
+        Assert.True(report.HasVideo);
+        Assert.True(report.HasAudio);
+        Assert.Equal(160, report.Width);
+        Assert.Equal(120, report.Height);
+        Assert.NotEmpty(report.EvidenceFrames);
+        Assert.All(report.EvidenceFrames, path => Assert.True(File.Exists(path)));
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task VerifyExportAsync_LongBlackVideo_FailsTemporalQualityGate()
+    {
+        var source = Path.Combine(_root, $"black-{Guid.NewGuid():N}.mp4");
+        await RunFfmpegAsync("-y -f lavfi -i color=c=black:s=160x120:r=30:d=3 -c:v libx264 -pix_fmt yuv420p", source);
+
+        var report = await _service.VerifyExportAsync(
+            source,
+            expectedWidth: 160,
+            expectedHeight: 120,
+            expectedDurationSeconds: 3);
+
+        Assert.Equal(MediaExportVerificationStatus.Failed, report.Status);
+        Assert.NotEmpty(report.BlackIntervals);
+        Assert.Contains(report.Errors, error => error.Contains("Black frames", StringComparison.OrdinalIgnoreCase));
+    }
+
     private async Task<string> CreateVideoWithAudioAsync()
     {
         var output = Path.Combine(_root, $"video-{Guid.NewGuid():N}.mp4");
         await RunFfmpegAsync("-y -f lavfi -i testsrc=size=160x120:rate=30:duration=2 -f lavfi -i sine=frequency=440:duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest", output);
+        return output;
+    }
+
+    private async Task<string> CreateImageAsync()
+    {
+        var output = Path.Combine(_root, $"image-{Guid.NewGuid():N}.png");
+        await RunFfmpegAsync("-y -f lavfi -i color=c=red:s=100x80:d=1 -frames:v 1", output);
         return output;
     }
 

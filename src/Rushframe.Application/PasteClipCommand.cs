@@ -21,27 +21,10 @@ public sealed class PasteClipCommand : IEditCommand
         var track = sequence.Tracks.FirstOrDefault(t => t.Id == TrackId);
         if (track == null)
             return EditResult.Fail(new TrackNotFoundError(TrackId));
+        if (track.Locked)
+            return EditResult.Fail("Track is locked");
 
-        var paste = new TimelineItem
-        {
-            Kind = CopyCommand.Clipboard.Kind,
-            MediaAssetId = CopyCommand.Clipboard.MediaAssetId,
-            TimelineStart = TimelineStart,
-            Duration = CopyCommand.Clipboard.Duration,
-            SourceStart = CopyCommand.Clipboard.SourceStart,
-            SourceDuration = CopyCommand.Clipboard.SourceDuration,
-            Speed = CopyCommand.Clipboard.Speed,
-            Volume = CopyCommand.Clipboard.Volume,
-            Opacity = CopyCommand.Clipboard.Opacity,
-            Transform = new Transform2D
-            {
-                PositionX = CopyCommand.Clipboard.Transform.PositionX,
-                PositionY = CopyCommand.Clipboard.Transform.PositionY,
-                ScaleX = CopyCommand.Clipboard.Transform.ScaleX,
-                ScaleY = CopyCommand.Clipboard.Transform.ScaleY,
-                RotationDegrees = CopyCommand.Clipboard.Transform.RotationDegrees,
-            },
-        };
+        var paste = TimelineItemCloner.Clone(CopyCommand.Clipboard, TimelineStart);
 
         _pastedItemId = paste.Id;
         track.Items.Add(paste);

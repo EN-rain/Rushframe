@@ -19,26 +19,7 @@ public sealed class CopyClipCommand : IEditCommand
             if (idx < 0) continue;
 
             var original = track.Items[idx];
-            Clipboard = new TimelineItem
-            {
-                Kind = original.Kind,
-                MediaAssetId = original.MediaAssetId,
-                TimelineStart = original.TimelineStart,
-                Duration = original.Duration,
-                SourceStart = original.SourceStart,
-                SourceDuration = original.SourceDuration,
-                Speed = original.Speed,
-                Volume = original.Volume,
-                Opacity = original.Opacity,
-                Transform = new Transform2D
-                {
-                    PositionX = original.Transform.PositionX,
-                    PositionY = original.Transform.PositionY,
-                    ScaleX = original.Transform.ScaleX,
-                    ScaleY = original.Transform.ScaleY,
-                    RotationDegrees = original.Transform.RotationDegrees,
-                },
-            };
+            Clipboard = TimelineItemCloner.Clone(original, original.TimelineStart);
 
             return EditResult.Ok();
         }

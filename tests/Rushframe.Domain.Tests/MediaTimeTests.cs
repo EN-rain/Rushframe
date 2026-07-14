@@ -30,4 +30,23 @@ public sealed class MediaTimeTests
     {
         Assert.Equal(0, MediaTime.Zero.Seconds);
     }
+
+    [Fact]
+    public void Media_time_uses_fixed_integer_ticks()
+    {
+        var time = MediaTime.FromSeconds(1.5);
+
+        Assert.Equal(MediaTime.TicksPerSecond, time.Denominator);
+        Assert.Equal(180_000, time.Ticks);
+    }
+
+    [Fact]
+    public void Rational_frame_rate_snaps_without_ntsc_drift()
+    {
+        var frameRate = FrameRate.Fps29_97;
+        var frame = MediaTime.FromFrame(300, frameRate);
+
+        Assert.Equal(300, frame.ToNearestFrame(frameRate));
+        Assert.Equal(10.01, frame.Seconds, 3);
+    }
 }

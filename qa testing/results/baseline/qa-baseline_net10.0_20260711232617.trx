@@ -1,0 +1,136 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="d2f96a3b-591d-4f64-b0db-1fc4025dfa55" name="LENOVO@DESKTOP-0NLB2MR 2026-07-11 23:26:17" runUser="DESKTOP-0NLB2MR\LENOVO" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-07-11T23:26:17.1973168+08:00" queuing="2026-07-11T23:26:17.1973173+08:00" start="2026-07-11T23:26:14.7860965+08:00" finish="2026-07-11T23:26:17.2339762+08:00" />
+  <TestSettings name="default" id="dd1ca51d-94b8-43f7-8bfe-a1205e279be9">
+    <Deployment runDeploymentRoot="LENOVO_DESKTOP-0NLB2MR_2026-07-11_23_26_17" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="945b3ea5-6dca-47f1-86f7-0948d3c0f6dd" testId="f46e473e-2d7e-c481-5e95-1476ac6e54e8" testName="Rushframe.Desktop.Tests.WorkspaceLayoutTests.default_layout_opens_editor_panels_and_closes_utility_drawers" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0001084" startTime="2026-07-11T23:26:17.1684293+08:00" endTime="2026-07-11T23:26:17.1685076+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="945b3ea5-6dca-47f1-86f7-0948d3c0f6dd" />
+    <UnitTestResult executionId="ef58da5a-e9c6-4fa5-a6e5-5be250514688" testId="f4165487-ce90-0130-df93-61e6f9ac51a8" testName="Rushframe.Desktop.Tests.WorkspaceLayoutTests.toggle_panel_does_not_affect_other_panels" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0001155" startTime="2026-07-11T23:26:17.1681725+08:00" endTime="2026-07-11T23:26:17.1682463+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ef58da5a-e9c6-4fa5-a6e5-5be250514688" />
+    <UnitTestResult executionId="d6e514da-ce5a-46a5-8fc2-b3b1406bf1ce" testId="df4759d8-37a2-071b-0726-e9d35a678b71" testName="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests.import_reads_v2_moments_audio_and_word_timestamps" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0261605" startTime="2026-07-11T23:26:17.1675767+08:00" endTime="2026-07-11T23:26:17.1783237+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d6e514da-ce5a-46a5-8fc2-b3b1406bf1ce" />
+    <UnitTestResult executionId="5a91dfbc-34e0-420c-a303-2c4dde80644d" testId="8caa1406-5f73-6692-8717-01564a65bd22" testName="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests.import_reads_pipeline_json_and_skips_invalid_segments" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0369959" startTime="2026-07-11T23:26:17.1262395+08:00" endTime="2026-07-11T23:26:17.1673417+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5a91dfbc-34e0-420c-a303-2c4dde80644d" />
+    <UnitTestResult executionId="ffb5ccb1-5d99-4d0c-b449-41b6328ccdac" testId="56c9f389-0bf1-db75-ee53-327641212f58" testName="Rushframe.Desktop.Tests.TimelineViewportTests.time_and_pixel_conversion_round_trip" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0001809" startTime="2026-07-11T23:26:17.1265881+08:00" endTime="2026-07-11T23:26:17.1266932+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ffb5ccb1-5d99-4d0c-b449-41b6328ccdac" />
+    <UnitTestResult executionId="9192d67c-0043-4bab-9bfc-80edac8d2947" testId="c2d88789-5503-b732-8660-d2dc7166c046" testName="Rushframe.Desktop.Tests.WorkspaceLayoutTests.damaged_layout_falls_back_to_default" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0126071" startTime="2026-07-11T23:26:17.1708578+08:00" endTime="2026-07-11T23:26:17.1712268+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9192d67c-0043-4bab-9bfc-80edac8d2947" />
+    <UnitTestResult executionId="2a1b28f9-1c79-4251-bacd-790da7d32ca4" testId="f7c4c9d5-38a6-89d0-7552-6a4852c57ccc" testName="Rushframe.Desktop.Tests.PanelRegistryTests.timeline_panel_cannot_be_closed" computerName="DESKTOP-0NLB2MR" duration="00:00:00.6519270" startTime="2026-07-11T23:26:16.4508414+08:00" endTime="2026-07-11T23:26:17.1090384+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="2a1b28f9-1c79-4251-bacd-790da7d32ca4" />
+    <UnitTestResult executionId="8e6d1e4d-810e-41a3-a04b-e0d8c2665450" testId="c2b9b7bc-01ea-cbc4-d252-2524b49d8b2a" testName="Rushframe.Desktop.Tests.TimelineViewportTests.zoom_keeps_anchor_time_stable" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0008364" startTime="2026-07-11T23:26:17.1257309+08:00" endTime="2026-07-11T23:26:17.1258325+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="8e6d1e4d-810e-41a3-a04b-e0d8c2665450" />
+    <UnitTestResult executionId="d5af330b-0d41-4337-bb52-64f884b0965b" testId="6526212f-b146-acbb-b88e-4a720c08fbff" testName="Rushframe.Desktop.Tests.PanelRegistryTests.panel_ids_are_unique" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0006385" startTime="2026-07-11T23:26:17.1655228+08:00" endTime="2026-07-11T23:26:17.1670355+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d5af330b-0d41-4337-bb52-64f884b0965b" />
+    <UnitTestResult executionId="96bffb70-09de-4b63-ad70-db57e8d40390" testId="809a0d57-7f6d-3caf-1ba8-66bc96bf555b" testName="Rushframe.Desktop.Tests.TimelineViewportTests.pan_is_clamped_to_content_bounds" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0009908" startTime="2026-07-11T23:26:17.1260108+08:00" endTime="2026-07-11T23:26:17.1263246+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="96bffb70-09de-4b63-ad70-db57e8d40390" />
+    <UnitTestResult executionId="89400ebf-9374-4dbf-a4d3-f43e1b435077" testId="88faff4e-350a-aede-46bd-1de3c270d1cf" testName="Rushframe.Desktop.Tests.WorkspaceLayoutTests.toggle_panel_closes_and_opens" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0001771" startTime="2026-07-11T23:26:17.1678989+08:00" endTime="2026-07-11T23:26:17.1679744+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="89400ebf-9374-4dbf-a4d3-f43e1b435077" />
+    <UnitTestResult executionId="2ebf7b3c-ad2f-4d0a-a1ba-8af098ccdd49" testId="99d3a9e0-4391-4ac1-49af-60be3d3406a6" testName="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests.store_in_project_replaces_analysis_for_same_asset" computerName="DESKTOP-0NLB2MR" duration="00:00:00.6559791" startTime="2026-07-11T23:26:16.4505693+08:00" endTime="2026-07-11T23:26:17.1260455+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="2ebf7b3c-ad2f-4d0a-a1ba-8af098ccdd49" />
+    <UnitTestResult executionId="2dc8af7d-052d-40d1-bc3f-53be2b75a5a5" testId="98353040-5bc4-a71b-9c93-2e3c984aaab9" testName="Rushframe.Desktop.Tests.PanelRegistryTests.registry_contains_all_panels" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0042024" startTime="2026-07-11T23:26:17.1257018+08:00" endTime="2026-07-11T23:26:17.1281177+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="2dc8af7d-052d-40d1-bc3f-53be2b75a5a5" />
+    <UnitTestResult executionId="54edd449-bb80-4dfc-852e-ef57468e8bee" testId="87ad44eb-0528-277a-0bce-0c84c5587ee4" testName="Rushframe.Desktop.Tests.PanelRegistryTests.find_returns_null_for_unknown" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0002171" startTime="2026-07-11T23:26:17.1644747+08:00" endTime="2026-07-11T23:26:17.1645512+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="54edd449-bb80-4dfc-852e-ef57468e8bee" />
+    <UnitTestResult executionId="439ad3ff-4ff0-415c-b29a-57428ea4207a" testId="f617f6bc-a4d1-faec-b960-a4dee2894c7c" testName="Rushframe.Desktop.Tests.WorkspaceLayoutTests.layout_serialization_round_trips" computerName="DESKTOP-0NLB2MR" duration="00:00:00.7035636" startTime="2026-07-11T23:26:16.4508183+08:00" endTime="2026-07-11T23:26:17.1676659+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="439ad3ff-4ff0-415c-b29a-57428ea4207a" />
+    <UnitTestResult executionId="57fdc99d-227c-4f14-a8b5-69b6e3a74aad" testId="7d2d5069-aa4f-441d-84d3-b3551d067ed4" testName="Rushframe.Desktop.Tests.PanelRegistryTests.known_panels_have_titles" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0002978" startTime="2026-07-11T23:26:17.1651804+08:00" endTime="2026-07-11T23:26:17.1652675+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="57fdc99d-227c-4f14-a8b5-69b6e3a74aad" />
+    <UnitTestResult executionId="9a45075f-1025-42b9-8ace-4e481061c3eb" testId="b984eaae-109b-db0c-6343-de1388b61ae8" testName="Rushframe.Desktop.Tests.WorkspaceLayoutTests.unknown_panel_returns_false" computerName="DESKTOP-0NLB2MR" duration="00:00:00.0001353" startTime="2026-07-11T23:26:17.1714740+08:00" endTime="2026-07-11T23:26:17.1715598+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9a45075f-1025-42b9-8ace-4e481061c3eb" />
+    <UnitTestResult executionId="61e5f7d8-6f36-4666-8787-abc3f575b5ce" testId="d32c0d2b-ce59-c0ed-5221-0c90085673d2" testName="Rushframe.Desktop.Tests.TimelineViewportTests.time_zero_maps_to_track_header_edge" computerName="DESKTOP-0NLB2MR" duration="00:00:00.6519117" startTime="2026-07-11T23:26:16.4490863+08:00" endTime="2026-07-11T23:26:17.1151347+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="61e5f7d8-6f36-4666-8787-abc3f575b5ce" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests.store_in_project_replaces_analysis_for_same_asset" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="99d3a9e0-4391-4ac1-49af-60be3d3406a6">
+      <Execution id="2ebf7b3c-ad2f-4d0a-a1ba-8af098ccdd49" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests" name="store_in_project_replaces_analysis_for_same_asset" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.PanelRegistryTests.timeline_panel_cannot_be_closed" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="f7c4c9d5-38a6-89d0-7552-6a4852c57ccc">
+      <Execution id="2a1b28f9-1c79-4251-bacd-790da7d32ca4" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.PanelRegistryTests" name="timeline_panel_cannot_be_closed" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.WorkspaceLayoutTests.damaged_layout_falls_back_to_default" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="c2d88789-5503-b732-8660-d2dc7166c046">
+      <Execution id="9192d67c-0043-4bab-9bfc-80edac8d2947" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.WorkspaceLayoutTests" name="damaged_layout_falls_back_to_default" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests.import_reads_pipeline_json_and_skips_invalid_segments" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="8caa1406-5f73-6692-8717-01564a65bd22">
+      <Execution id="5a91dfbc-34e0-420c-a303-2c4dde80644d" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests" name="import_reads_pipeline_json_and_skips_invalid_segments" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.PanelRegistryTests.panel_ids_are_unique" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="6526212f-b146-acbb-b88e-4a720c08fbff">
+      <Execution id="d5af330b-0d41-4337-bb52-64f884b0965b" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.PanelRegistryTests" name="panel_ids_are_unique" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests.import_reads_v2_moments_audio_and_word_timestamps" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="df4759d8-37a2-071b-0726-e9d35a678b71">
+      <Execution id="d6e514da-ce5a-46a5-8fc2-b3b1406bf1ce" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.MediaIntelligenceImportServiceTests" name="import_reads_v2_moments_audio_and_word_timestamps" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.TimelineViewportTests.time_zero_maps_to_track_header_edge" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="d32c0d2b-ce59-c0ed-5221-0c90085673d2">
+      <Execution id="61e5f7d8-6f36-4666-8787-abc3f575b5ce" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.TimelineViewportTests" name="time_zero_maps_to_track_header_edge" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.WorkspaceLayoutTests.unknown_panel_returns_false" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="b984eaae-109b-db0c-6343-de1388b61ae8">
+      <Execution id="9a45075f-1025-42b9-8ace-4e481061c3eb" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.WorkspaceLayoutTests" name="unknown_panel_returns_false" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.PanelRegistryTests.known_panels_have_titles" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="7d2d5069-aa4f-441d-84d3-b3551d067ed4">
+      <Execution id="57fdc99d-227c-4f14-a8b5-69b6e3a74aad" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.PanelRegistryTests" name="known_panels_have_titles" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.WorkspaceLayoutTests.default_layout_opens_editor_panels_and_closes_utility_drawers" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="f46e473e-2d7e-c481-5e95-1476ac6e54e8">
+      <Execution id="945b3ea5-6dca-47f1-86f7-0948d3c0f6dd" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.WorkspaceLayoutTests" name="default_layout_opens_editor_panels_and_closes_utility_drawers" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.PanelRegistryTests.registry_contains_all_panels" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="98353040-5bc4-a71b-9c93-2e3c984aaab9">
+      <Execution id="2dc8af7d-052d-40d1-bc3f-53be2b75a5a5" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.PanelRegistryTests" name="registry_contains_all_panels" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.TimelineViewportTests.zoom_keeps_anchor_time_stable" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="c2b9b7bc-01ea-cbc4-d252-2524b49d8b2a">
+      <Execution id="8e6d1e4d-810e-41a3-a04b-e0d8c2665450" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.TimelineViewportTests" name="zoom_keeps_anchor_time_stable" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.WorkspaceLayoutTests.toggle_panel_closes_and_opens" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="88faff4e-350a-aede-46bd-1de3c270d1cf">
+      <Execution id="89400ebf-9374-4dbf-a4d3-f43e1b435077" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.WorkspaceLayoutTests" name="toggle_panel_closes_and_opens" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.TimelineViewportTests.pan_is_clamped_to_content_bounds" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="809a0d57-7f6d-3caf-1ba8-66bc96bf555b">
+      <Execution id="96bffb70-09de-4b63-ad70-db57e8d40390" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.TimelineViewportTests" name="pan_is_clamped_to_content_bounds" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.WorkspaceLayoutTests.toggle_panel_does_not_affect_other_panels" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="f4165487-ce90-0130-df93-61e6f9ac51a8">
+      <Execution id="ef58da5a-e9c6-4fa5-a6e5-5be250514688" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.WorkspaceLayoutTests" name="toggle_panel_does_not_affect_other_panels" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.TimelineViewportTests.time_and_pixel_conversion_round_trip" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="56c9f389-0bf1-db75-ee53-327641212f58">
+      <Execution id="ffb5ccb1-5d99-4d0c-b449-41b6328ccdac" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.TimelineViewportTests" name="time_and_pixel_conversion_round_trip" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.WorkspaceLayoutTests.layout_serialization_round_trips" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="f617f6bc-a4d1-faec-b960-a4dee2894c7c">
+      <Execution id="439ad3ff-4ff0-415c-b29a-57428ea4207a" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.WorkspaceLayoutTests" name="layout_serialization_round_trips" />
+    </UnitTest>
+    <UnitTest name="Rushframe.Desktop.Tests.PanelRegistryTests.find_returns_null_for_unknown" storage="c:\users\lenovo\desktop\projectsss\rushframe\tests\rushframe.desktop.tests\bin\debug\net10.0-windows\rushframe.desktop.tests.dll" id="87ad44eb-0528-277a-0bce-0c84c5587ee4">
+      <Execution id="54edd449-bb80-4dfc-852e-ef57468e8bee" />
+      <TestMethod codeBase="C:\Users\LENOVO\Desktop\Projectsss\Rushframe\tests\Rushframe.Desktop.Tests\bin\Debug\net10.0-windows\Rushframe.Desktop.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Rushframe.Desktop.Tests.PanelRegistryTests" name="find_returns_null_for_unknown" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="f46e473e-2d7e-c481-5e95-1476ac6e54e8" executionId="945b3ea5-6dca-47f1-86f7-0948d3c0f6dd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f4165487-ce90-0130-df93-61e6f9ac51a8" executionId="ef58da5a-e9c6-4fa5-a6e5-5be250514688" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="df4759d8-37a2-071b-0726-e9d35a678b71" executionId="d6e514da-ce5a-46a5-8fc2-b3b1406bf1ce" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8caa1406-5f73-6692-8717-01564a65bd22" executionId="5a91dfbc-34e0-420c-a303-2c4dde80644d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="56c9f389-0bf1-db75-ee53-327641212f58" executionId="ffb5ccb1-5d99-4d0c-b449-41b6328ccdac" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c2d88789-5503-b732-8660-d2dc7166c046" executionId="9192d67c-0043-4bab-9bfc-80edac8d2947" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f7c4c9d5-38a6-89d0-7552-6a4852c57ccc" executionId="2a1b28f9-1c79-4251-bacd-790da7d32ca4" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c2b9b7bc-01ea-cbc4-d252-2524b49d8b2a" executionId="8e6d1e4d-810e-41a3-a04b-e0d8c2665450" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="6526212f-b146-acbb-b88e-4a720c08fbff" executionId="d5af330b-0d41-4337-bb52-64f884b0965b" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="809a0d57-7f6d-3caf-1ba8-66bc96bf555b" executionId="96bffb70-09de-4b63-ad70-db57e8d40390" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="88faff4e-350a-aede-46bd-1de3c270d1cf" executionId="89400ebf-9374-4dbf-a4d3-f43e1b435077" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="99d3a9e0-4391-4ac1-49af-60be3d3406a6" executionId="2ebf7b3c-ad2f-4d0a-a1ba-8af098ccdd49" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="98353040-5bc4-a71b-9c93-2e3c984aaab9" executionId="2dc8af7d-052d-40d1-bc3f-53be2b75a5a5" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="87ad44eb-0528-277a-0bce-0c84c5587ee4" executionId="54edd449-bb80-4dfc-852e-ef57468e8bee" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f617f6bc-a4d1-faec-b960-a4dee2894c7c" executionId="439ad3ff-4ff0-415c-b29a-57428ea4207a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7d2d5069-aa4f-441d-84d3-b3551d067ed4" executionId="57fdc99d-227c-4f14-a8b5-69b6e3a74aad" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="b984eaae-109b-db0c-6343-de1388b61ae8" executionId="9a45075f-1025-42b9-8ace-4e481061c3eb" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d32c0d2b-ce59-c0ed-5221-0c90085673d2" executionId="61e5f7d8-6f36-4666-8787-abc3f575b5ce" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="18" executed="18" passed="18" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.9)&#xD;
+[xUnit.net 00:00:00.46]   Discovering: Rushframe.Desktop.Tests&#xD;
+[xUnit.net 00:00:00.50]   Discovered:  Rushframe.Desktop.Tests&#xD;
+[xUnit.net 00:00:00.53]   Starting:    Rushframe.Desktop.Tests&#xD;
+[xUnit.net 00:00:01.29]   Finished:    Rushframe.Desktop.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

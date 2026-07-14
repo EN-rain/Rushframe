@@ -7,6 +7,10 @@ import json
 import math
 import re
 import sqlite3
+from array import array
+from functools import lru_cache
+from threading import Lock
+from typing import Any
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
@@ -23,6 +27,19 @@ class SearchResult:
     score: float
     roles: list[str]
     tags: list[str]
+
+
+class _CachedEmbeddingModel:
+    def __init__(self, model: Any) -> None:
+        self.model = model
+        self.lock = Lock()
+
+
+@lru_cache(maxsize=2)
+def _get_embedding_model(model_name: str) -> _CachedEmbeddingModel:
+    from sentence_transformers import SentenceTransformer
+
+    return _CachedEmbeddingModel(SentenceTransformer(model_name))
 
 
 class MediaContextIndex:
@@ -71,7 +88,8 @@ class MediaContextIndex:
                 );
                 CREATE TABLE embeddings (
                     moment_id TEXT PRIMARY KEY,
-                    vector_json TEXT NOT NULL,
+                    vector_blob BLOB NOT NULL,
+                    dimensions INTEGER NOT NULL,
                     FOREIGN KEY(moment_id) REFERENCES moments(moment_id) ON DELETE CASCADE
                 );
                 CREATE TABLE embedding_meta (
@@ -124,10 +142,13 @@ class MediaContextIndex:
         ]
         provider = "builtin-hash-v1"
         try:
-            from sentence_transformers import SentenceTransformer
-
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            vectors = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+            cached_model = _get_embedding_model("all-MiniLM-L6-v2")
+            with cached_model.lock:
+                vectors = cached_model.model.encode(
+                    texts,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
             provider = "sentence-transformers/all-MiniLM-L6-v2"
         except Exception:
             vectors = [_hash_embedding(text) for text in texts]
@@ -137,9 +158,13 @@ class MediaContextIndex:
             (provider,),
         )
         connection.executemany(
-            "INSERT INTO embeddings(moment_id, vector_json) VALUES (?, ?)",
+            "INSERT INTO embeddings(moment_id, vector_blob, dimensions) VALUES (?, ?, ?)",
             [
-                (moment.moment_id, json.dumps([float(value) for value in vector]))
+                (
+                    moment.moment_id,
+                    sqlite3.Binary(_vector_to_blob(vector)),
+                    len(vector),
+                )
                 for moment, vector in zip(moments, vectors)
             ],
         )
@@ -239,11 +264,14 @@ class MediaContextIndex:
             provider = str(provider_row[0]) if provider_row else "builtin-hash-v1"
             if provider.startswith("sentence-transformers/"):
                 try:
-                    from sentence_transformers import SentenceTransformer
+                    cached_model = _get_embedding_model(provider.split("/", 1)[1])
                 except ImportError:
                     return []
-                model = SentenceTransformer(provider.split("/", 1)[1])
-                query_vector = [float(value) for value in model.encode([query], normalize_embeddings=True)[0]]
+                with cached_model.lock:
+                    query_vector = [
+                        float(value)
+                        for value in cached_model.model.encode([query], normalize_embeddings=True)[0]
+                    ]
             else:
                 query_vector = _hash_embedding(query)
             clauses = ["m.overall_score >= ?"]
@@ -251,18 +279,28 @@ class MediaContextIndex:
             if max_duration is not None:
                 clauses.append("(m.end_seconds - m.start_seconds) <= ?")
                 parameters.append(max_duration)
+            candidate_limit = max(limit * 20, 200)
+            parameters.append(candidate_limit)
             rows = connection.execute(
                 f"""
-                SELECT m.*, e.vector_json
+                SELECT m.*, e.vector_blob, e.dimensions
                 FROM moments m JOIN embeddings e ON e.moment_id = m.moment_id
                 WHERE {' AND '.join(clauses)}
+                ORDER BY m.overall_score DESC
+                LIMIT ?
                 """,
                 parameters,
             ).fetchall()
         results = [
             self._row_to_result(
                 row,
-                score=max(0.0, _cosine(query_vector, json.loads(row["vector_json"]))),
+                score=max(
+                    0.0,
+                    _cosine(
+                        query_vector,
+                        _blob_to_vector(row["vector_blob"], int(row["dimensions"])),
+                    ),
+                ),
             )
             for row in rows
         ]
@@ -321,10 +359,27 @@ def _hash_embedding(text: str, dimensions: int = 384) -> list[float]:
     return [value / norm for value in vector] if norm else vector
 
 
+def _vector_to_blob(vector: Any) -> bytes:
+    values = array("f", (float(value) for value in vector))
+    return values.tobytes()
+
+
+def _blob_to_vector(blob: bytes, dimensions: int) -> list[float]:
+    values = array("f")
+    values.frombytes(blob)
+    if len(values) != dimensions:
+        return []
+    return values.tolist()
+
+
 def _cosine(left: list[float], right: list[float]) -> float:
     if len(left) != len(right) or not left:
         return 0.0
     numerator = sum(a * b for a, b in zip(left, right))
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    return numerator / (left_norm * right_norm) if left_norm and right_norm else 0.0
+    left_norm_squared = sum(value * value for value in left)
+    right_norm_squared = sum(value * value for value in right)
+    if not left_norm_squared or not right_norm_squared:
+        return 0.0
+    if abs(left_norm_squared - 1.0) < 0.001 and abs(right_norm_squared - 1.0) < 0.001:
+        return numerator
+    return numerator / math.sqrt(left_norm_squared * right_norm_squared)

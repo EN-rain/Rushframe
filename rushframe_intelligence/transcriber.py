@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
+from threading import Lock
+from typing import Any
 
 from rushframe_intelligence.models import TranscriptSegment, WordTiming
 
 
 class TranscriptionUnavailable(RuntimeError):
     pass
+
+
+class _CachedWhisperModel:
+    def __init__(self, model: Any) -> None:
+        self.model = model
+        self.lock = Lock()
+
+
+@lru_cache(maxsize=4)
+def _get_whisper_model(model_size: str, device: str, compute_type: str) -> _CachedWhisperModel:
+    from faster_whisper import WhisperModel
+
+    return _CachedWhisperModel(
+        WhisperModel(model_size, device=device, compute_type=compute_type)
+    )
 
 
 _FILLER_WORDS = {
@@ -30,14 +48,16 @@ def transcribe(
             "faster-whisper is not installed. Install Rushframe's intelligence dependencies."
         ) from exc
 
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
-    segments, info = model.transcribe(
-        str(Path(media_path)),
-        language=language,
-        word_timestamps=True,
-        vad_filter=True,
-        condition_on_previous_text=False,
-    )
+    cached_model = _get_whisper_model(model_size, device, compute_type)
+    with cached_model.lock:
+        segments, info = cached_model.model.transcribe(
+            str(Path(media_path)),
+            language=language,
+            word_timestamps=True,
+            vad_filter=True,
+            condition_on_previous_text=False,
+        )
+        segments = list(segments)
     detected_language = getattr(info, "language", None) or language
     output: list[TranscriptSegment] = []
     for index, segment in enumerate(segments, start=1):

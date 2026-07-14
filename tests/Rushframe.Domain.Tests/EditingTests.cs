@@ -529,6 +529,24 @@ public class EditingTests
     }
 
     [Fact]
+    public void RemoveEffectCommand_Undo_restores_original_order()
+    {
+        var seq = MakeSequence();
+        var clip = MakeClip();
+        var first = new EffectInstance { EffectTypeId = "first" };
+        var middle = new EffectInstance { EffectTypeId = "middle" };
+        var last = new EffectInstance { EffectTypeId = "last" };
+        clip.Effects.AddRange([first, middle, last]);
+        seq.Tracks[0].Items.Add(clip);
+        var cmd = new RemoveEffectCommand { ItemId = clip.Id, EffectInstanceId = middle.Id };
+
+        Assert.True(cmd.Execute(seq).Success);
+        Assert.True(cmd.Undo(seq).Success);
+
+        Assert.Equal(["first", "middle", "last"], clip.Effects.Select(effect => effect.EffectTypeId));
+    }
+
+    [Fact]
     public void ReorderEffectCommand()
     {
         var seq = MakeSequence();
@@ -577,6 +595,42 @@ public class EditingTests
         var undo = cmd.Undo(seq);
 
         Assert.True(undo.Success);
+        Assert.Empty(seq.Transitions);
+    }
+
+    [Fact]
+    public void ApplyTransitionCommand_rejects_locked_track()
+    {
+        var seq = MakeSequence();
+        var left = new TimelineItem { TimelineStart = MediaTime.Zero, Duration = MediaTime.FromSeconds(2) };
+        var right = new TimelineItem { TimelineStart = MediaTime.FromSeconds(2), Duration = MediaTime.FromSeconds(2) };
+        seq.Tracks[0].Items.AddRange([left, right]);
+        seq.Tracks[0].Locked = true;
+
+        var result = new ApplyTransitionCommand { LeftItemId = left.Id, RightItemId = right.Id }.Execute(seq);
+
+        Assert.False(result.Success);
+        Assert.Empty(seq.Transitions);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-0.5)]
+    public void ApplyTransitionCommand_rejects_non_positive_duration(double seconds)
+    {
+        var seq = MakeSequence();
+        var left = new TimelineItem { TimelineStart = MediaTime.Zero, Duration = MediaTime.FromSeconds(2) };
+        var right = new TimelineItem { TimelineStart = MediaTime.FromSeconds(2), Duration = MediaTime.FromSeconds(2) };
+        seq.Tracks[0].Items.AddRange([left, right]);
+
+        var result = new ApplyTransitionCommand
+        {
+            LeftItemId = left.Id,
+            RightItemId = right.Id,
+            Duration = MediaTime.FromSeconds(seconds),
+        }.Execute(seq);
+
+        Assert.False(result.Success);
         Assert.Empty(seq.Transitions);
     }
 
@@ -646,6 +700,50 @@ public class EditingTests
         prop.Keyframes.Add(new Keyframe { Time = MediaTime.FromSeconds(10), Value = 1 });
 
         Assert.Equal(0, prop.GetValueAt(MediaTime.FromSeconds(5)));
+    }
+
+    [Fact]
+    public void Keyframe_GetValueAt_BezierUsesControlPoints()
+    {
+        var channel = new AnimationChannel { PropertyName = AnimationPropertyNames.PositionX };
+        channel.Keyframes.Add(new Keyframe
+        {
+            Time = MediaTime.Zero,
+            Value = 0,
+            Interpolation = InterpolationType.Bezier,
+            OutTangentX = 0.1,
+            OutTangentY = 0.9,
+        });
+        channel.Keyframes.Add(new Keyframe
+        {
+            Time = MediaTime.FromSeconds(1),
+            Value = 100,
+            InTangentX = 0.9,
+            InTangentY = 1,
+        });
+
+        var midpoint = channel.GetValueAt(MediaTime.FromSeconds(0.5));
+
+        Assert.True(midpoint > 50);
+    }
+
+    [Fact]
+    public void TimelineItem_ResolvesMultipleAnimationChannels()
+    {
+        var item = new TimelineItem();
+        item.AnimationChannels.Add(new AnimationChannel
+        {
+            PropertyName = AnimationPropertyNames.PositionX,
+            DefaultValue = 10,
+        });
+        item.AnimationChannels.Add(new AnimationChannel
+        {
+            PropertyName = AnimationPropertyNames.Opacity,
+            DefaultValue = 0.5,
+        });
+
+        Assert.Equal(10, item.GetAnimatedValue(AnimationPropertyNames.PositionX, MediaTime.Zero, 0));
+        Assert.Equal(0.5, item.GetAnimatedValue(AnimationPropertyNames.Opacity, MediaTime.Zero, 1));
     }
 
     [Fact]

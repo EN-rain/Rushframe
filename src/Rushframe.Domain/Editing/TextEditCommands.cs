@@ -15,6 +15,8 @@ public sealed class SetTextContentCommand : IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (item.Locked) return EditResult.Fail("Item is locked");
 
             _oldText = item.TextContent;
             item.TextContent = NewText;
@@ -75,6 +77,8 @@ public sealed class SetTextPropertiesCommand : IEditCommand
         {
             var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
             if (item == null) continue;
+            if (track.Locked) return EditResult.Fail("Track is locked");
+            if (item.Locked) return EditResult.Fail("Item is locked");
 
             if (item.Kind != ItemKind.Text) return EditResult.Fail("Item is not a text element");
 
