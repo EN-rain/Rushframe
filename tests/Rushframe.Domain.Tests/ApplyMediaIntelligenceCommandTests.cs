@@ -114,6 +114,59 @@ public sealed class ApplyMediaIntelligenceCommandTests
     }
 
     [Fact]
+    public void undo_restores_generated_content_at_exact_original_indices()
+    {
+        var assetId = MediaAssetId.New();
+        var sequence = new Sequence();
+        var videoTrack = new Track { Kind = TrackKind.Video, Name = "V1" };
+        var captionTrack = new Track { Kind = TrackKind.Text, Name = "AI Captions" };
+        var target = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            MediaAssetId = assetId,
+            Duration = MediaTime.FromSeconds(5),
+            SourceDuration = MediaTime.FromSeconds(5),
+        };
+        var beforeCaption = new TimelineItem { Kind = ItemKind.Text, TextContent = "before" };
+        var generatedCaption = new TimelineItem
+        {
+            Kind = ItemKind.Text,
+            TextContent = "generated",
+            MediaIntelligenceSourceAssetId = assetId,
+        };
+        var afterCaption = new TimelineItem { Kind = ItemKind.Text, TextContent = "after" };
+        videoTrack.Items.Add(target);
+        captionTrack.Items.AddRange([beforeCaption, generatedCaption, afterCaption]);
+        sequence.Tracks.AddRange([videoTrack, captionTrack]);
+        var beforeMarker = new Marker { Label = "before", Time = MediaTime.Zero };
+        var generatedMarker = new Marker
+        {
+            Label = "generated",
+            Time = MediaTime.FromSeconds(1),
+            MediaIntelligenceSourceAssetId = assetId,
+        };
+        var afterMarker = new Marker { Label = "after", Time = MediaTime.FromSeconds(2) };
+        sequence.Markers.AddRange([beforeMarker, generatedMarker, afterMarker]);
+        var command = new ApplyMediaIntelligenceCommand
+        {
+            TargetItemId = target.Id,
+            Analysis = new MediaIntelligenceAnalysis
+            {
+                MediaAssetId = assetId,
+                Scenes = [new() { SceneId = "new", Start = MediaTime.FromSeconds(3), End = MediaTime.FromSeconds(4) }],
+                Transcript = [new() { Start = MediaTime.FromSeconds(3), End = MediaTime.FromSeconds(4), Text = "new" }],
+            },
+        };
+
+        Assert.True(command.Execute(sequence).Success);
+        Assert.True(command.Undo(sequence).Success);
+
+        Assert.Equal([beforeMarker, generatedMarker, afterMarker], sequence.Markers);
+        Assert.Equal([beforeCaption, generatedCaption, afterCaption], captionTrack.Items);
+        Assert.Equal([videoTrack, captionTrack], sequence.Tracks);
+    }
+
+    [Fact]
     public void execute_rejects_locked_caption_track_without_partial_marker_changes()
     {
         var assetId = MediaAssetId.New();

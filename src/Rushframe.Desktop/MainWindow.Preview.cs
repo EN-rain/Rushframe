@@ -857,6 +857,7 @@ public partial class MainWindow
             _ => TrackKind.Video,
         };
         var itemKind = _previewAsset.Kind == MediaKind.Image ? ItemKind.Image : ItemKind.Clip;
+        var commands = new List<IEditCommand>();
         var track = seq.Tracks.FirstOrDefault(t => t.Kind == trackKind && !t.Locked);
         if (track == null)
         {
@@ -866,7 +867,7 @@ public partial class MainWindow
                 Name = trackKind == TrackKind.Audio ? "A1" : trackKind == TrackKind.Overlay ? "O1" : "V1",
                 Order = seq.Tracks.Count,
             };
-            seq.Tracks.Add(track);
+            commands.Add(new AddPreparedTrackCommand { Track = track });
         }
 
         var timelineStart = _timeline.PlayheadTime;
@@ -877,6 +878,11 @@ public partial class MainWindow
             var overlapping = track.Items
                 .Where(item => item.TimelineStart < overwriteEnd && item.TimelineStart.Add(item.Duration) > timelineStart)
                 .ToList();
+            if (overlapping.Any(item => item.Locked))
+            {
+                StatusText.Text = "Overwrite blocked: an overlapping item is locked";
+                return;
+            }
             if (overlapping.Count > 0)
             {
                 var answer = MessageBox.Show(
@@ -892,11 +898,11 @@ public partial class MainWindow
                 }
             }
 
-            foreach (var existing in overlapping)
-                Execute(new DeleteClipCommand { ItemId = existing.Id });
+            commands.AddRange(overlapping.Select(existing =>
+                (IEditCommand)new DeleteClipCommand { ItemId = existing.Id }));
         }
 
-        Execute(new AddClipCommand
+        commands.Add(new AddClipCommand
         {
             TrackId = track.Id,
             Item = new TimelineItem
@@ -909,7 +915,10 @@ public partial class MainWindow
                 SourceDuration = duration,
             },
         });
-        StatusText.Text = overwrite ? "Source range overwritten at playhead" : "Source range inserted at playhead";
+        if (Execute(new CompositeEditCommand(
+                overwrite ? "Overwrite source range" : "Insert source range",
+                commands)))
+            StatusText.Text = overwrite ? "Source range overwritten at playhead" : "Source range inserted at playhead";
     }
 
     private void CyclePreviewSpeed()

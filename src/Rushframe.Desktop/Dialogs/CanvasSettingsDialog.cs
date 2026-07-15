@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using Rushframe.Domain;
 
@@ -76,7 +77,13 @@ internal sealed class CanvasSettingsDialog
                 FrameRate.Fps30, FrameRate.Fps50, FrameRate.Fps59_94, FrameRate.Fps60,
             }.OrderBy(rate => Math.Abs(rate.Value - _sequence.FrameRate.Value)).First(),
             MinHeight = 32,
+            MaxDropDownHeight = 220,
         };
+        var frameRateText = new FrameworkElementFactory(typeof(TextBlock));
+        frameRateText.SetBinding(
+            TextBlock.TextProperty,
+            new Binding(nameof(FrameRate.Value)) { StringFormat = "{}{0:0.###}" });
+        frameRateCombo.ItemTemplate = new DataTemplate { VisualTree = frameRateText };
         var canvasPanel = new StackPanel { Margin = new Thickness(14) };
         canvasPanel.Children.Add(Label("Canvas preset"));
         var presets = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };

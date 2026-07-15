@@ -15,6 +15,18 @@ public sealed class MediaIntelligenceUiPolicyTests
         Assert.Equal(expected, MediaIntelligenceUiPolicy.NormalizeWhisperModel(value));
     }
 
+    [Theory]
+    [InlineData(" GROQ ", "groq")]
+    [InlineData("Cloudflare", "cloudflare")]
+    [InlineData("QWEN", "groq")]
+    [InlineData("Gemini", "groq")]
+    [InlineData("unknown", "groq")]
+    [InlineData(null, "groq")]
+    public void visual_provider_is_normalized_to_supported_cli_identifier(string? value, string expected)
+    {
+        Assert.Equal(expected, MediaIntelligenceUiPolicy.NormalizeVisualProvider(value));
+    }
+
     [Fact]
     public void dependent_flags_are_not_emitted_when_parent_analysis_is_disabled()
     {
@@ -29,7 +41,7 @@ public sealed class MediaIntelligenceUiPolicyTests
             EnableDiarization: true,
             EnableAudioEvents: true,
             BuildEmbeddings: false)
-            .AppendArguments(arguments, "gemini");
+            .AppendArguments(arguments, "groq");
 
         Assert.Contains("--no-transcript", arguments);
         Assert.Contains("--no-audio", arguments);
@@ -52,11 +64,11 @@ public sealed class MediaIntelligenceUiPolicyTests
             EnableDiarization: true,
             EnableAudioEvents: true,
             BuildEmbeddings: true)
-            .AppendArguments(arguments, "qwen");
+            .AppendArguments(arguments, "groq");
 
         Assert.Contains("--no-scenes", arguments);
         Assert.Contains("--visual-provider", arguments);
-        Assert.Equal("qwen", arguments[arguments.IndexOf("--visual-provider") + 1]);
+        Assert.Equal("groq", arguments[arguments.IndexOf("--visual-provider") + 1]);
         Assert.Contains("--ocr", arguments);
         Assert.Contains("--alignment", arguments);
         Assert.Contains("--diarization", arguments);

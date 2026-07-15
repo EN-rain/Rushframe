@@ -16,14 +16,16 @@ public sealed class MediaIntelligenceRunProfileTests
         Assert.DoesNotContain("--alignment", arguments);
     }
 
-    [Fact]
-    public void visual_analysis_uses_selected_provider()
+    [Theory]
+    [InlineData("groq")]
+    [InlineData("cloudflare")]
+    public void visual_analysis_uses_selected_provider(string provider)
     {
-        var arguments = BuildArguments(MediaIntelligenceRunProfile.VisualAnalysis, "qwen");
+        var arguments = BuildArguments(MediaIntelligenceRunProfile.VisualAnalysis, provider);
 
         Assert.Contains("--no-transcript", arguments);
         Assert.Contains("--no-audio", arguments);
-        Assert.Equal("qwen", arguments[arguments.IndexOf("--visual-provider") + 1]);
+        Assert.Equal(provider, arguments[arguments.IndexOf("--visual-provider") + 1]);
     }
 
     [Fact]
@@ -57,7 +59,7 @@ public sealed class MediaIntelligenceRunProfileTests
 
     private static List<string> BuildArguments(
         MediaIntelligenceRunProfile profile,
-        string visualProvider = "gemini")
+        string visualProvider = "groq")
     {
         var arguments = new List<string>();
         profile.AppendArguments(arguments, visualProvider);

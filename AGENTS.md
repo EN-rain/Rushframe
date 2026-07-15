@@ -263,6 +263,7 @@ Do not hand-edit a saved project format in UI code when the serializer or migrat
 | `MainWindow.Inspector.cs` | media-aware inspector profiles and item/effect editing |
 | `MainWindow.Automation.cs` | workflow, transcript actions, variants, receipts, compositions |
 | `MainWindow.Assets.cs` | creative-asset discovery and insertion |
+| `MainWindow.SoundLibrary.cs` | durable local sound catalog, explicit project registration, license metadata, and timeline insertion |
 | `MainWindow.Canvas.cs` | canvas settings and guide overlay |
 | `MainWindow.CommandSearch.cs` | global function search |
 | `Timeline/TimelineControl*.cs` | timeline drawing, hit testing, selection, drag/trim/group interactions |
@@ -400,11 +401,11 @@ Security invariants:
 - output paths restricted to the saved project directory or the local app-data export directory;
 - no UNC/network output paths for agent renders.
 
-Current bridge protocol version is `2`. Main routes include timeline/transcript/workflow/provider state, cost handling, variants, compositions, render jobs, receipts, audit, edit-plan preview/apply, single edits, and rendering.
+Current bridge protocol version is `2`. Main routes include bounded editing context, timeline/transcript/workflow/provider state, cost handling, variants, compositions, render jobs, receipts, audit, edit-plan preview/review/apply, single edits, and rendering.
 
 ### Agent edit actions
 
-`AgentEditCommandFactory.SupportedActions` is the canonical action list. It currently covers:
+`AgentEditSkillCatalog` is the canonical machine-readable action contract. `AgentEditCommandFactory.SupportedActions` is derived from that catalog. It currently covers:
 
 - adding text/captions/clips/music;
 - move/trim/split/delete/ripple-delete/duplicate;
@@ -419,7 +420,7 @@ When adding or changing an action:
 
 1. Use the same domain command as the manual editor.
 2. Validate typed IDs, bounds, source registration, offline state, locks, and payload values.
-3. Update `SupportedActions` and capability output.
+3. Update `AgentEditSkillCatalog` parameters, preconditions, warnings, and capability output.
 4. Update MCP/tool schemas if the action is exposed there.
 5. Add factory/plan/bridge tests.
 6. Keep preview-only behavior non-mutating.
@@ -437,7 +438,8 @@ Agents never receive raw domain object mutation or raw FFmpeg execution.
 - checks protected tracks/items;
 - compiles to one `CompositeEditCommand`;
 - records operation summaries, affected ranges, and warnings;
-- does not execute during compilation;
+- projects separately built commands on an isolated project snapshot to catch operation-order conflicts and score the proposed result;
+- never mutates the live project during compilation;
 - applies as one atomic undo entry after revision validation and approval.
 
 Do not partially apply an agent plan.
@@ -497,6 +499,9 @@ The Python package is optional and local-first. It analyzes registered source fi
 - `python -m rushframe_intelligence search ...`
 - `python -m rushframe_intelligence context ...`
 - `python -m rushframe_intelligence serve ...`
+- `python -m rushframe_intelligence index-sfx ...`
+- `python -m rushframe_intelligence search-sfx ...`
+- `python -m rushframe_intelligence sound-library-status ...`
 
 `worker.py` is the CLI. `backend.py` hosts local HTTP and MCP, normally on `127.0.0.1:7319`.
 
@@ -529,6 +534,9 @@ Main outputs include `media-analysis.json`, `summary.json`, `manifest.json`, `sc
 - Bound context/search result counts.
 - Use absolute local paths for analysis/index operations.
 - The backend is loopback-only, request-limited, thread-bounded, and optionally session-token protected.
+- The cross-project sound catalog lives under local app data, indexes only user-approved local files/roots, and never downloads media or model weights.
+- Real CLAP embeddings require an explicitly installed local checkpoint through `RUSHFRAME_CLAP_CHECKPOINT`; otherwise use the deterministic local fallback.
+- MCP sound search must omit raw local paths. Catalog-only results are read-only until the user registers them in the open project.
 - Do not broaden MCP bridge URLs beyond localhost/127.0.0.1.
 
 When changing Python output fields, also inspect the C# media-intelligence importer and its tests.
@@ -576,6 +584,7 @@ Use this table before searching the whole repository.
 | Variants | `ProductionAutomation.cs` | automation UI, variant render context, receipts |
 | External composition | `ExternalCompositionService.cs` | composition dialog/UI, render jobs, import path |
 | Creative assets | `CreativeAssetPackService.cs` | asset dialog/insertion, guardrail tests |
+| Sound library/index | `MainWindow.SoundLibrary.cs`, `SoundLibraryCatalogService.cs`, `rushframe_intelligence/sound_library.py` | project media commands, MCP backend, export license guard, focused sound-library tests |
 | Extension manifest | `ExtensionManifestService.cs` | extension domain model and guardrail tests |
 | Save/autosave/recovery | `ProjectSaveCoordinator.cs` | repository, autosave service, project partial, persistence tests |
 | Media intelligence pipeline | `rushframe_intelligence/pipeline.py` | models, serialization, C# importer, Python tests |

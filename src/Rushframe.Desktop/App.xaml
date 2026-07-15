@@ -520,7 +520,6 @@
                             </Trigger>
                             <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                 <Setter TargetName="Chrome" Property="Background" Value="{StaticResource PanelRaisedBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
                             </Trigger>
                             <Trigger Property="IsEditable" Value="True">
                                 <Setter TargetName="SelectionBox" Property="Visibility" Value="Collapsed" />
@@ -616,15 +615,13 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="CheckBoxBorder" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+                                <Setter TargetName="CheckBoxBorder" Property="Background" Value="{StaticResource PanelRaisedBrush}" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="CheckBoxBorder" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
-                                <Setter TargetName="CheckBoxBorder" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="CheckBoxBorder" Property="Background" Value="{StaticResource PanelRaisedBrush}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="CheckBoxBorder" Property="Background" Value="{StaticResource AccentBrush}" />
-                                <Setter TargetName="CheckBoxBorder" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
                                 <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">

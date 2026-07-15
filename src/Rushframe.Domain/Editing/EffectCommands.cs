@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class AddEffectCommand : IEditCommand
+public sealed class AddEffectCommand : IAtomicEditCommand
 {
     public string Description => $"Add effect {EffectTypeId} to {ItemId}";
 
@@ -58,7 +58,7 @@ public sealed class AddEffectCommand : IEditCommand
     }
 }
 
-public sealed class RemoveEffectCommand : IEditCommand
+public sealed class RemoveEffectCommand : IAtomicEditCommand
 {
     public string Description => $"Remove effect {EffectInstanceId}";
 
@@ -108,7 +108,7 @@ public sealed class RemoveEffectCommand : IEditCommand
     }
 }
 
-public sealed class UpdateEffectCommand : IEditCommand
+public sealed class UpdateEffectCommand : IAtomicEditCommand
 {
     public string Description => $"Update effect {EffectInstanceId}";
 
@@ -166,7 +166,7 @@ public sealed class UpdateEffectCommand : IEditCommand
     }
 }
 
-public sealed class ReorderEffectCommand : IEditCommand
+public sealed class ReorderEffectCommand : IAtomicEditCommand
 {
     public string Description => $"Reorder effect {EffectInstanceId}";
 

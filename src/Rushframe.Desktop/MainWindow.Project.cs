@@ -12,8 +12,39 @@ namespace Rushframe.Desktop;
 
 public partial class MainWindow
 {
+    private readonly record struct ProjectOperationContext(Project Project, ProjectId ProjectId, long Generation);
+
+    private ProjectOperationContext CaptureProjectOperationContext() =>
+        new(_project, _project.Id, _projectGeneration);
+
+    private bool IsCurrentProjectOperation(ProjectOperationContext context) =>
+        context.Generation == _projectGeneration
+        && context.ProjectId == _project.Id
+        && ReferenceEquals(context.Project, _project);
+
+    private bool HasActiveProjectOperation() =>
+        _isMediaOperationRunning
+        || _project.RenderJobs.Any(job => job.Status is RenderJobStatus.Rendering or RenderJobStatus.Verifying);
+
+    private void ProjectReplacement_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+        e.CanExecute = !HasActiveProjectOperation();
+        e.Handled = true;
+    }
+
     private async Task<bool> ConfirmCanReplaceCurrentProjectAsync()
     {
+        if (HasActiveProjectOperation())
+        {
+            MessageBox.Show(
+                this,
+                "Wait for the active render to finish or cancel it before opening another project.",
+                "Render In Progress",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
+
         if (!TryResolvePendingInspectorChanges()) return false;
         if (!_projectDirty) return true;
 
@@ -23,6 +54,16 @@ public partial class MainWindow
 
         if (answer == MessageBoxResult.Cancel) return false;
         if (answer == MessageBoxResult.Yes && !await SaveCurrentProjectAsync()) return false;
+        if (HasActiveProjectOperation())
+        {
+            MessageBox.Show(
+                this,
+                "A render or media operation started while the project was being saved. Cancel or finish it before replacing the project.",
+                "Operation In Progress",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
         return true;
     }
 
@@ -185,13 +226,22 @@ public partial class MainWindow
         try
         {
             StatusText.Text = "Saving project…";
-            await _saveCoordinator.SaveExplicitAsync(_project, path);
+            var savedRevision = await _saveCoordinator.SaveExplicitAsync(_project, path);
             _currentProjectPath = path;
             _recentProjectsService.Add(path);
             ProjectNameText.Text = string.IsNullOrWhiteSpace(_project.Name) ? "Untitled" : _project.Name;
             ProjectNameEditBox.Text = ProjectNameText.Text;
-            _projectDirty = false;
-            StatusText.Text = "Project saved";
+            if (_project.Revision == savedRevision)
+            {
+                _projectDirty = false;
+                StatusText.Text = "Project saved";
+            }
+            else
+            {
+                _projectDirty = true;
+                _saveCoordinator.MarkDirty(_project);
+                StatusText.Text = $"Revision {savedRevision} saved; newer edits remain unsaved";
+            }
             return true;
         }
         catch (Exception ex)
@@ -246,8 +296,8 @@ public partial class MainWindow
 
     private void LoadProjectIntoEditor(Project project, string? projectPath, string displayName)
     {
+        _projectGeneration = checked(_projectGeneration + 1);
         _project = project;
-        MergeInstalledCapabilities(_project);
         _currentProjectPath = projectPath;
         _undoRedo.Clear();
         _clipboard = null;

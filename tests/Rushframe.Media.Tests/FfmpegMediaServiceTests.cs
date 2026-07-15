@@ -43,6 +43,178 @@ public sealed class FfmpegMediaServiceTests : IDisposable
 
     [Fact]
     [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_InvalidEmbeddedAudioProbeFailsInsteadOfSilentlyDroppingAudio()
+    {
+        var invalidSource = Path.Combine(_root, "invalid-media.mp4");
+        await File.WriteAllTextAsync(invalidSource, "not media");
+        var output = Path.Combine(_root, "invalid-output.mp4");
+        var project = new Project();
+        var asset = new MediaAsset
+        {
+            Kind = MediaKind.Video,
+            OriginalPath = invalidSource,
+            RelativeProjectPath = invalidSource,
+            Duration = MediaTime.FromSeconds(1),
+        };
+        project.MediaLibrary.Add(asset);
+        var track = new Track { Kind = TrackKind.Video, Name = "V1" };
+        track.Items.Add(new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            MediaAssetId = asset.Id,
+            Duration = MediaTime.FromSeconds(1),
+            SourceDuration = MediaTime.FromSeconds(1),
+        });
+        project.MainSequence!.Tracks.Add(track);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            _service.ExportTimelineAsync(project, project.MainSequence, output));
+
+        Assert.Contains("silently dropping audio", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(output));
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_RenderFailurePreservesExistingOutput()
+    {
+        var invalidSource = Path.Combine(_root, "invalid-existing-source.mp4");
+        await File.WriteAllTextAsync(invalidSource, "not media");
+        var output = Path.Combine(_root, "existing-output.mp4");
+        var originalOutput = new byte[] { 1, 3, 3, 7 };
+        await File.WriteAllBytesAsync(output, originalOutput);
+        var project = new Project();
+        var asset = new MediaAsset
+        {
+            Kind = MediaKind.Video,
+            OriginalPath = invalidSource,
+            RelativeProjectPath = invalidSource,
+            Duration = MediaTime.FromSeconds(1),
+        };
+        project.MediaLibrary.Add(asset);
+        project.MainSequence!.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Video,
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Clip,
+                    MediaAssetId = asset.Id,
+                    Duration = MediaTime.FromSeconds(1),
+                    SourceDuration = MediaTime.FromSeconds(1),
+                },
+            },
+        });
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            _service.ExportTimelineAsync(project, project.MainSequence, output));
+
+        Assert.Equal(originalOutput, await File.ReadAllBytesAsync(output));
+        Assert.Empty(Directory.GetFiles(_root, ".existing-output.*.rendering.mp4"));
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_RejectsOutputThatMatchesRegisteredSource()
+    {
+        var source = await CreateVideoWithAudioAsync();
+        var project = new Project();
+        var asset = new MediaAsset
+        {
+            Kind = MediaKind.Video,
+            OriginalPath = source,
+            RelativeProjectPath = source,
+            Duration = MediaTime.FromSeconds(2),
+        };
+        project.MediaLibrary.Add(asset);
+        project.MainSequence!.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Video,
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Clip,
+                    MediaAssetId = asset.Id,
+                    Duration = MediaTime.FromSeconds(1),
+                    SourceDuration = MediaTime.FromSeconds(1),
+                },
+            },
+        });
+        var originalLength = new FileInfo(source).Length;
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.ExportTimelineAsync(project, project.MainSequence, source));
+
+        Assert.Contains("registered source", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(originalLength, new FileInfo(source).Length);
+    }
+
+    [Fact]
+    public void ValidateRenderCapabilities_RejectsSegmentedSpeedCurves()
+    {
+        var sequence = new Sequence();
+        var item = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            Duration = MediaTime.FromSeconds(2),
+            SourceDuration = MediaTime.FromSeconds(2),
+            SpeedCurve = new SpeedCurve(),
+        };
+        item.SpeedCurve.Segments.Add(new SpeedSegment
+        {
+            SourceStart = MediaTime.Zero,
+            SourceEnd = MediaTime.FromSeconds(1),
+            Speed = 2,
+        });
+        sequence.Tracks.Add(new Track { Kind = TrackKind.Video, Items = { item } });
+
+        var error = Assert.Throws<NotSupportedException>(() =>
+            FfmpegMediaService.ValidateRenderCapabilities(sequence));
+
+        Assert.Contains("Segmented speed curves", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
+    public async Task ExportTimelineAsync_MutedVisualItemStillRequiresItsVideoSource()
+    {
+        var missingSource = Path.Combine(_root, "missing-muted-visual.mp4");
+        var output = Path.Combine(_root, "missing-muted-visual-output.mp4");
+        var project = new Project();
+        var asset = new MediaAsset
+        {
+            Kind = MediaKind.Video,
+            OriginalPath = missingSource,
+            RelativeProjectPath = missingSource,
+            Duration = MediaTime.FromSeconds(1),
+        };
+        project.MediaLibrary.Add(asset);
+        project.MainSequence!.Tracks.Add(new Track
+        {
+            Kind = TrackKind.Video,
+            Muted = true,
+            Items =
+            {
+                new TimelineItem
+                {
+                    Kind = ItemKind.Clip,
+                    MediaAssetId = asset.Id,
+                    Muted = true,
+                    Duration = MediaTime.FromSeconds(1),
+                    SourceDuration = MediaTime.FromSeconds(1),
+                },
+            },
+        });
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            _service.ExportTimelineAsync(project, project.MainSequence, output));
+        Assert.False(File.Exists(output));
+    }
+
+    [Fact]
+    [Trait("Category", "Media")]
     public async Task Derivatives_GeneratedVideo_CreateFiles()
     {
         var source = await CreateVideoWithAudioAsync();

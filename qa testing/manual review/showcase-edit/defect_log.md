@@ -1104,3 +1104,630 @@ AI tab toggle styling in `MainWindow.xaml` and application color resources in `A
 
 ### Resolution and validation
 Replaced the undefined `AccentMutedBrush` reference with the existing `SelectionBrush`. Rebuilt Release with zero warnings and zero errors, reran all 295 Release tests, and launched the real `Rushframe.Desktop.exe` with startup diagnostics. The editor reached `window.loaded`, auto-closed normally, produced no dispatcher-unhandled event, and exited with code 0.
+
+## QA-NEW-034 - AI analysis importer crashes on nullable numeric fields produced by the local pipeline
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Run the AI tab-equivalent local analysis profile against `batman entry.mov` with scene, transcript, and audio analysis enabled.
+2. Import the generated `media-analysis.json` through `MediaIntelligenceImportService`.
+3. Observe an audio event whose optional `clarity` field is JSON `null`.
+
+### Expected
+Optional numeric fields represented as JSON `null` import as nullable values. The complete analysis is stored in the project and remains available for Apply, save/reopen, and agent context.
+
+### Actual
+`ReadNullableDouble` calls `JsonElement.TryGetDouble` without checking `ValueKind`. `TryGetDouble` throws `InvalidOperationException` for JSON `null`, so Rushframe cannot import a valid analysis file produced by its own local pipeline.
+
+### Impact
+The AI tab can complete analysis successfully but fail when storing the result, blocking captions, markers, search, edit planning, persistence, and downstream agent-assisted edits.
+
+### Evidence
+Reproduced with `qa testing/manual review/batman-ai-five-edits/current-run/analysis-full-local/media-analysis.json`; stack trace terminates in `MediaIntelligenceImportService.ReadNullableDouble` while reading `audio.events[].clarity`.
+
+### Suspected component
+`src/Rushframe.Infrastructure/MediaIntelligenceImportService.cs` numeric JSON helpers.
+
+### Resolution and validation
+Numeric readers now require `JsonValueKind.Number` before calling `TryGetDouble`, `TryGetInt32`, or `TryGetInt64`; numeric arrays ignore `null` and non-number entries. Added a regression using the pipeline's nullable metadata, scene-quality, audio-event, music, and moment fields. The focused importer suite passed 4 tests. The corrected full local Batman analysis imported into all five generated Rushframe projects, survived save/reopen, and preserved 14 transcript segments, one scene, one editing moment, and zero warnings. Both Debug and Release repository suites passed 296 C# tests, and the Python suite passed 6 tests on 2026-07-15.
+
+## QA-NEW-035 - Local scene detector emits negative starts that the project importer discards
+
+**Severity:** High
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Run the built-in Video parser or full local AI analysis against `batman entry.mov`.
+2. Inspect the generated first scene and moment range.
+3. Import the generated analysis into a Rushframe project.
+
+### Expected
+The local pipeline produces non-negative media times. Importing the pipeline output preserves the detected scene and derived editing moment.
+
+### Actual
+PySceneDetect reports the first scene at `-0.033333` seconds. The pipeline serializes that value unchanged, while `MediaIntelligenceImportService` rejects all ranges whose start is below zero. The import therefore drops the only scene and moment and adds two warnings.
+
+### Impact
+A successful AI analysis can appear empty or incomplete inside the editor. Scene markers, hook search, agent context, Apply, and persisted analysis lose valid beginning-of-file data.
+
+### Evidence
+The first completed Batman edit manifest reported `ai_scene_count=0` and `ai_warning_count=2`, while the source analysis JSON contained one usable scene and one moment beginning at `-0.033333`.
+
+### Suspected component
+`rushframe_intelligence/scene_detector.py` and defensive range normalization in `MediaIntelligenceImportService`.
+
+### Resolution and validation
+The Python detector now clamps scene starts to zero and guarantees each end is no earlier than its normalized start. The C# importer also defensively normalizes negative scene and moment starts to zero before validating the range. Added Python and C# regressions. Regenerated `analysis-full-local-fixed/media-analysis.json` contains one scene, 14 transcript segments, one editing moment, and zero warnings; all five final edit manifests preserve those counts after project save/reopen. The Python suite passed 6 tests and both Debug and Release C# suites passed 296 tests on 2026-07-15.
+
+## QA-NEW-036 - Explicit save and serialization can lose or silently clean newer edits
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Begin an explicit project save at revision R.
+2. Apply another edit while the asynchronous write is in progress, producing revision R+1.
+3. Observe `SaveCurrentProjectAsync` after the revision-R write completes.
+4. Serialize a project with missing defaults or stale schema metadata through `ProjectSaveCoordinator`.
+
+### Expected
+Only the exact saved revision may be marked clean. Newer edits remain dirty and close protection remains active. Serialization operates on an isolated snapshot and never mutates the live project from a worker thread.
+
+### Actual
+`SaveCurrentProjectAsync` unconditionally sets `_projectDirty = false` after the awaited save. `ProjectSerializer.Serialize` updates schema, workflow defaults, providers, variants, and overview on the passed live project while snapshot serialization runs through `Task.Run`.
+
+### Impact
+A newer manual edit can be lost without a close warning, and background persistence can mutate project state outside edit commands, revision tracking, and WPF thread ownership.
+
+### Suspected component
+`MainWindow.Project.cs`, `ProjectSaveCoordinator`, and `ProjectSerializer`.
+
+### Resolution and validation
+Explicit save now returns the exact written revision and clears `_projectDirty` only when the live project still matches it; newer revisions remain dirty and are requeued for autosave. `ProjectSerializer.Serialize` creates and normalizes an isolated project snapshot instead of mutating the live object, including schema/default/overview updates. Regression coverage verifies pure serialization and exact saved-revision behavior. The focused persistence suite passed, and the complete Debug and Release suites each passed 336 C# tests.
+
+## QA-NEW-037 - Preview overwrite is a multi-revision partial mutation
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Mark a source range and choose Overwrite at a playhead position overlapping multiple timeline items.
+2. Include a locked overlapping item or force the final add to reject.
+3. Inspect timeline state, undo history, and project revision.
+
+### Expected
+Track creation, overlap removal, and replacement insertion are one prevalidated atomic command, one undo entry, and one revision increment. Any rejection leaves the timeline unchanged.
+
+### Actual
+The UI directly creates a track, executes each delete separately, then executes the add separately. A late failure can leave earlier deletions committed and one overwrite can create several undo entries and revisions.
+
+### Impact
+Manual overwrite can destroy timeline content and cannot be undone as one logical edit.
+
+### Suspected component
+`MainWindow.Preview.cs` overwrite path.
+
+### Resolution and validation
+Preview overwrite now resolves and validates the destination first, creates a prepared track through an edit command when required, and executes all overlap deletions plus the replacement insertion as one `CompositeEditCommand`. A rejection restores the complete sequence snapshot, creates no undo entry, and increments no revision. Release safety contracts and adversarial command tests passed.
+
+## QA-NEW-038 - Locked tracks and locked downstream clips remain mutable
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Lock a track, then invoke delete-track, rename, reorder, duplicate, mute, or solo commands.
+2. Place an individually locked clip after another clip.
+3. Ripple-move, ripple-trim, or ripple-delete the earlier clip.
+
+### Expected
+Every affected track and item is validated before mutation. Locked targets reject the complete operation with no state change or undo entry.
+
+### Actual
+Track commands other than lock-toggle do not reject locked tracks. Ripple operations validate only the selected item and then move locked downstream clips.
+
+### Impact
+Core data-integrity locks can be bypassed by manual and agent command paths.
+
+### Suspected component
+`TrackCommands.cs`, `MoveClipCommand.cs`, `TrimClipCommand.cs`, and `RippleDeleteClipCommand.cs`.
+
+### Resolution and validation
+Track mutations now reject locked tracks except the explicit lock toggle. Ripple move, trim, and delete precompute every downstream target and reject before mutation when any affected item is locked. Focused lock and editing-integrity regressions verify unchanged state and clean undo history on rejection; all Domain tests pass in Debug and Release.
+
+## QA-NEW-039 - Failed commands can destroy undo history or leave composite partial state
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Put a command in undo or redo history whose Undo/Execute returns failure or throws.
+2. Execute a composite in which a later child fails or throws and a rollback child also fails.
+3. Inspect history and sequence state.
+
+### Expected
+History entries move stacks only after successful completion. Failed or exceptional execute/undo/redo restores the exact pre-operation sequence. Composite execution and undo are atomic even when child rollback fails.
+
+### Actual
+`UndoRedoStack` removes history entries before executing them. `CompositeEditCommand` does not catch child exceptions, ignores rollback failures, and can partially undo before returning failure.
+
+### Impact
+A rejected undo/redo can become unrecoverable, and a logical edit can corrupt timeline state despite reporting failure.
+
+### Suspected component
+`UndoRedoStack.cs` and `CompositeEditCommand.cs`.
+
+### Resolution and validation
+`UndoRedoStack` now moves entries only after successful execute/undo/redo and restores the exact pre-operation sequence when a command fails or throws. `CompositeEditCommand` uses the same sequence snapshot boundary, so child failures, rollback failures, and exceptions cannot leave partial state. Snapshot restoration preserves matching track/item object identity by stable ID. Adversarial execute, undo, redo, exception, and rollback regressions passed.
+
+## QA-NEW-040 - External agents can disable editor approval policy
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Send an agent timeline edit, edit plan, workflow decision, variant/composition mutation, render, or retry request.
+2. Include `require_approval:false` in the caller-controlled payload.
+3. Observe whether the editor displays its approval UI.
+
+### Expected
+Approval policy is owned by the editor. External payloads cannot disable required human review. Preview-only requests remain non-mutating, and internally approved retries prompt exactly once.
+
+### Actual
+Multiple mutating handlers read `require_approval` directly from the request and skip confirmation when false. The Python MCP schema advertises that bypass field.
+
+### Impact
+A caller with the session token can silently apply edits, alter production state, register compositions, or render outputs without the user approval required by the product boundary.
+
+### Suspected component
+Agent handlers in `MainWindow.xaml.cs` and public MCP schemas in `rushframe_intelligence/backend.py`.
+
+### Resolution and validation
+Caller-controlled approval flags were removed from the MCP schemas and all consequential editor handlers. Edits, plans, workflow decisions, variants, compositions, renders, and retries now follow editor-owned approval policy. Internally retried renders use a private `approvalAlreadyGranted` path only after the retry dialog succeeds, preventing both bypass and duplicate prompts. Desktop source-contract and Python schema tests passed.
+
+## QA-NEW-041 - Render output and receipts use mutable live project state
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Start a manual or agent timeline/variant export at revision R.
+2. Apply a manual edit while the asynchronous render or verification is running.
+3. Compare rendered frames, receipt project revision/graph hash, source records, warnings, and the live project reference committed afterward.
+
+### Expected
+Rendering and verification use one immutable revision-R project snapshot. The receipt describes that same snapshot. Completion metadata is then committed to the current live project in one coordinated mutation without overwriting newer edits.
+
+### Actual
+Manual and agent timeline exports pass live `Project`/`Sequence` objects into asynchronous renderer and receipt creation. Receipt creation also mutates the passed project directly, so output, source revision, graph hash, warnings, and stored reference can describe different states.
+
+### Impact
+Exports are not reproducible or auditable, and a receipt can certify a graph different from the frames actually rendered.
+
+### Suspected component
+`ExportController`, agent render handlers, `MainWindow.Automation.cs`, and `RenderReceiptService`.
+
+### Resolution and validation
+Manual timeline, manual variant, agent timeline, and agent variant renders now use a revision-frozen project/sequence snapshot. Receipt generation reads that same snapshot and no longer mutates it. `RenderReceiptService.ApplyToProject` commits only receipt/workflow/variant metadata to the current live project inside one coordinated mutation, preserving newer edits. Behavioral tests verify the receipt revision and graph remain tied to the rendered snapshot while live revisions advance independently.
+
+## QA-NEW-042 - Undoing an applied agent plan leaves project automation state applied
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Preview and approve an agent edit plan.
+2. Apply it, then use the normal editor Undo command.
+3. Inspect the timeline, `Project.AgentEditPlans`, and workflow stage state.
+
+### Expected
+The timeline mutation, applied-plan record, and workflow transition are one logical undoable action. Undo restores all three; redo reapplies all three.
+
+### Actual
+Only the compiled timeline command enters `UndoRedoStack`. The applied record and workflow changes are added afterward outside the command, so Undo restores timeline items while the plan remains recorded as Applied/AwaitingApproval.
+
+### Impact
+Agent audit and workflow state can contradict the canonical timeline, making later approvals, retries, and conflict decisions unreliable.
+
+### Suspected component
+`ApplyAgentEditPlanAsync`, undo/redo integration, and agent workflow state transitions.
+
+### Resolution and validation
+`AgentPlanApplicationCommand` now wraps the compiled timeline edit, applied-plan record, and workflow transition as one undoable command. Undo restores the exact prior timeline, plan list, workflow stages, decisions, and costs; redo reapplies them and refreshes the applied revision/timestamp. Focused behavioral tests cover apply, undo, and redo consistency.
+
+## QA-NEW-043 - Solo and track-order state do not control realtime preview and export consistently
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Create multiple visual/audio tracks and enable Solo on one track.
+2. Reorder or duplicate tracks so list order and stored `Track.Order` differ.
+3. Compare realtime preview and final export layer/audio selection.
+
+### Expected
+When any visible track is soloed, only soloed tracks contribute visual or audio content. Canonical sequence list order controls compositing consistently after reorder/duplicate and survives undo/redo.
+
+### Actual
+Realtime and FFmpeg render paths ignore Solo and sort by mutable `Track.Order`. Reorder changes list position without normalizing `Order`, and duplicate can create duplicate order values.
+
+### Impact
+Preview/export can include tracks the user explicitly isolated and can composite in an order different from the timeline UI.
+
+### Suspected component
+`RealtimeRenderPlan`, `FfmpegTimelineRenderer`, and track-order commands.
+
+### Resolution and validation
+Realtime preview and the canonical FFmpeg renderer now apply the same visible Solo rule to both visual and audio tracks. `TrackOrdering.Normalize` makes sequence list order canonical after add, delete, reorder, duplicate, prepared-track insertion, and undo. Focused preview/export state tests verify isolated tracks and consistent compositing order.
+
+## QA-NEW-044 - Clip insertion and deletion can create incompatible tracks or dangling transitions
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Execute `AddClipCommand` or paste with an item kind incompatible with the destination track.
+2. Delete or ripple-delete an item referenced by an incoming/outgoing transition.
+3. Split the left item of an outgoing transition and inspect transition endpoints; undo each action.
+
+### Expected
+Incompatible insertion is rejected before mutation. Delete removes referencing transitions and exact undo restores their original positions. Split reattaches an outgoing transition to the new right-hand item and undo restores the original endpoint.
+
+### Actual
+`AddClipCommand` and `PasteClipCommand` validate existence/lock only. Delete/ripple-delete leave dangling transition IDs. Split leaves the outgoing transition attached to the shortened left half.
+
+### Impact
+Invalid projects can be created through manual and agent paths; preview/export transition behavior can be wrong or fail after ordinary editing.
+
+### Suspected component
+Add/paste/delete/ripple-delete/split edit commands.
+
+### Resolution and validation
+Add and paste commands now enforce `TrackCompatibility` before mutation. Delete and ripple-delete remove all incoming/outgoing transitions and store their exact original indices for undo. Split transfers an outgoing transition endpoint to the new right-hand item and restores it on undo. Editing-integrity regressions cover incompatible insertion, transition cleanup, split endpoint behavior, and exact undo.
+
+## QA-NEW-045 - Intelligence undo and group paste can silently change ordering or partially apply
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Reapply media intelligence over existing generated markers/captions, then undo.
+2. Copy a multi-track selection where one clipboard item has no compatible unlocked destination.
+3. Paste the group and inspect ordering and item count.
+
+### Expected
+Undo restores every removed marker, track, and item at its exact original index. Group paste resolves all destinations first and rejects the whole operation when any item cannot be placed.
+
+### Actual
+Media-intelligence undo appends removed content. Group paste skips unplaceable items and applies the rest without warning.
+
+### Impact
+Undo is not exact and a single paste gesture can silently lose part of the user’s selection.
+
+### Suspected component
+`ApplyMediaIntelligenceCommand` and `MainWindow.Paste_Executed`.
+
+### Resolution and validation
+Media-intelligence apply records the exact original marker, track, and item indices and restores them in place on undo. Group paste resolves a compatible unlocked destination for every copied item before constructing the composite command; one unplaceable item cancels the complete paste. Single-item paste also enforces destination compatibility. Focused Domain and Desktop source-contract tests passed.
+
+## QA-NEW-046 - Local agent servers expose unbounded or unauthorized request and file access paths
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Send a chunked bridge body larger than 1 MiB without a declared `Content-Length`.
+2. Open many simultaneous bridge requests and stop the editor while they are active.
+3. Start the Python backend with a non-loopback host or call `/capabilities`, `/search`, or `/context` without the session token.
+4. Supply an arbitrary local `context.sqlite` or `media-analysis.json` path to MCP search/context tools.
+
+### Expected
+Actual streamed bytes are bounded, concurrent requests are capped and drained on shutdown, every non-health backend route is session-authenticated, backend binding is loopback-only, and intelligence tools can inspect only analyzed media registered in the open project.
+
+### Actual
+The bridge trusts declared length then reads the entire stream and starts an unbounded task per request. Python GET routes are unauthenticated, host binding is caller-controlled, and search/context accept arbitrary local filesystem paths.
+
+### Impact
+A local process or exposed backend configuration can exhaust memory/tasks or read analysis databases outside the open Rushframe project.
+
+### Suspected component
+`LocalAgentBridgeService`, `rushframe_intelligence/backend.py`, and live editor context endpoints.
+
+### Resolution and validation
+`LocalAgentBridgeService` now enforces the 1 MiB limit while streaming chunked bodies, caps concurrent work at eight requests, tracks in-flight requests, and cancels/drains them during shutdown. The Python backend now rejects non-loopback binds, requires the editor session token for every non-health route, and routes search/context through the authenticated editor bridge using registered `media_asset_id` values instead of arbitrary local paths. Focused Release validation passed 3 bridge concurrency/size/shutdown tests, 5 release-safety contract tests, and 3 Python backend security tests.
+
+## QA-NEW-047 - Agent output containment does not resolve network drives or junction escapes
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Release build on 2026-07-15
+
+### Steps
+1. Request an output under the saved project directory through an existing junction/reparse point that targets another directory.
+2. Request an output on a mapped network drive.
+3. Compare lexical prefix validation with the physical target path.
+
+### Expected
+Agent outputs remain on a local drive and physically inside the project/export root after resolving existing reparse points. Directory escapes and mapped network drives reject before output creation.
+
+### Actual
+Validation checks a normalized string prefix and direct UNC prefixes only. Mapped network drives and junctions can point outside the allowed root while retaining an allowed-looking path.
+
+### Impact
+An approved render could write outside the project boundary or onto a network location.
+
+### Suspected component
+`ValidateAgentOutputPath`.
+
+### Resolution and validation
+Agent render paths now pass through `LocalOutputPathGuard`, which checks lexical containment, resolves existing reparse points to their physical targets, rejects physical escapes, and rejects UNC or mapped network drives. Focused Release validation passed the inside-root, lexical traversal, junction escape, and source-contract tests.
+
+## QA-NEW-048 - Incomplete manual-asset and subtitle refactors break the WPF build
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Build `Rushframe.slnx` after the manual asset/subtitle/campaign command refactors.
+2. Observe WPF temporary-project compilation.
+
+### Expected
+Every manual insertion path calls the current async/command-based implementation, built-in shapes use the same atomic track-plus-item mutation path, and subtitle parsing resolves its file/data exception types.
+
+### Actual
+The built-in shape path still called removed `EnsureAssetTrack`, command search still called removed `AddSelectedMediaToTimeline`, and `SubtitleParser.cs` omitted `System.IO` while using `File`, `FileNotFoundException`, and `InvalidDataException`.
+
+### Impact
+The Windows desktop application cannot compile, blocking all runtime QA and release packaging.
+
+### Suspected component
+`MainWindow.Assets.cs`, `MainWindow.CommandSearch.cs`, and `Services/SubtitleParser.cs`.
+
+### Resolution and validation
+Built-in shapes now create a prepared overlay track and sticker in one `CompositeEditCommand`; command search calls `AddSelectedMediaToTimelineAsync`; subtitle parsing imports `System.IO`. The complete Debug and Release builds pass with zero warnings and zero errors, followed by 336 passing C# tests in each configuration.
+
+## QA-NEW-049 - Campaign action controls violate the editor icon-button contract
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Open the production workflow panel XAML or run `MainEditorThemeContractTests`.
+2. Inspect the campaign description/task action buttons.
+
+### Expected
+Editor action buttons are icon-only, expose a descriptive tooltip, and retain an accessible automation name.
+
+### Actual
+Save description, add task, toggle task, and delete task used text content; some lacked tooltips. The shared UI contract rejected the first text button.
+
+### Impact
+The new panel was visually inconsistent and less compact than the rest of Rushframe, and hover-label accessibility was incomplete.
+
+### Suspected component
+Campaign/task controls in `MainWindow.xaml`.
+
+### Resolution and validation
+All four controls now use toolbar paths with the existing icon button styles, descriptive tooltips, and `AutomationProperties.Name`. All 12 `MainEditorThemeContractTests` pass, and both complete C# suites remain green.
+
+## QA-NEW-050 - Export can silently omit offline sources and overwrite an existing or original file
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Export a sequence containing an active missing/offline source.
+2. Export over an existing output or choose a registered original source as the destination.
+3. Cancel or fail FFmpeg after output creation.
+
+### Expected
+Export preflight rejects missing active sources and any source-path collision. Rendering uses a unique temporary file and atomically publishes only a verified result.
+
+### Actual
+Missing visual/audio sources are skipped, FFmpeg writes directly to the destination with `-y`, and source-file collisions are not centrally blocked.
+
+### Impact
+A visibly incomplete render can pass verification, and a failed export can destroy a valid output or original source.
+
+### Resolution and validation
+The canonical renderer now preflights every active visual and audible item, rejects missing/offline or kind-incompatible registered sources, validates timeline and source bounds, and refuses an output path that matches any registered original. FFmpeg renders to a unique sibling temporary file; only a non-empty successful result is atomically moved over the destination, while cancellation or failure removes the temporary file and preserves the previous output. Regressions verify missing muted visual media is rejected, failed rendering preserves an existing output byte-for-byte, and original-source collisions are blocked. All 18 media tests pass in Debug and Release.
+
+## QA-NEW-051 - Portrait export positions fitted video at the bottom instead of canvas center
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Put a landscape source on a landscape sequence.
+2. render it as a portrait variant such as 1080x1920.
+3. Inspect the fitted video region.
+
+### Expected
+Aspect-fitted sequence output is centered horizontally and vertically within the portrait canvas unless an explicit variant/item override moves it.
+
+### Actual
+The fitted video appears in the lower portion of the portrait export.
+
+### Impact
+Portrait outputs are compositionally incorrect and do not match the editor’s centered-canvas expectation.
+
+### Resolution and validation
+Manual timeline export, agent timeline export, and manual/agent variant export now center primary video-track clips and images when a landscape sequence is rendered to a portrait canvas. The adjustment is made only on the revision-frozen render snapshot, does not mutate the live timeline, preserves explicit variant position overrides and position animation channels, and can be disabled with the authored `autoCenterPortrait=false` override. A real FFmpeg integration test rendered a red 320x180 landscape source to 180x320, sampled the output pixels, confirmed red at the portrait vertical center, and confirmed black letterbox below it.
+
+## QA-NEW-052 - Agent render completion can mutate a newly opened project
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Start a long agent timeline, variant, or composition render in project A.
+2. Open or create project B before the render completes.
+3. Let the original continuation finish.
+
+### Expected
+Project replacement is blocked or cancels the operation, and every continuation verifies the original project identity before committing jobs, receipts, variants, workflow, or imported output.
+
+### Actual
+New/Open remain available and render completion mutates the current `_project` reference.
+
+### Impact
+Render state from project A can corrupt project B.
+
+### Resolution and validation
+New/Open Project commands are disabled while media or render work is active, replacement is rechecked after an awaited save, and every manual or agent timeline/variant/composition operation captures the originating project reference, ID, and generation. Continuations verify that context after each long await and before committing render jobs, receipts, workflow state, variants, compositions, or generated media. Stale completions return without changing the newly opened project. Release-safety contracts cover command gating and project-scoped commits, and the Release desktop startup smoke exits cleanly with telemetry.
+
+## QA-NEW-053 - Project-level commands inside sequence composites are not fully atomic and redo identities drift
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Execute a creative-asset composite that registers project media before a later sequence command fails.
+2. Undo and redo add/duplicate/paste commands and compare created IDs.
+
+### Expected
+Failure restores every project and sequence mutation. Redo restores the same objects and identifiers created by the first execution.
+
+### Actual
+Sequence-only snapshots cannot roll back media-library changes, while several commands create new objects/IDs on redo.
+
+### Impact
+Failed edits leave partial state and redo can invalidate references.
+
+### Resolution and validation
+Composite execution now undoes every completed child when a later child fails and rolls already-undone children forward when composite undo fails; a fallback sequence snapshot remains for non-atomic legacy commands. Project media registration therefore rolls back with the timeline. Production commands opt into `IAtomicEditCommand`, eliminating full-sequence JSON snapshots on ordinary edits while retaining the safety boundary for untrusted commands. Add/duplicate/paste/track/effect/transition/split commands preserve their created objects and IDs across redo. A regression forces failure after project media registration and confirms an unchanged media library and empty undo history; identity and adversarial rollback tests pass.
+
+## QA-NEW-054 - Relink/import accept unprobed or incompatible media metadata
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Relink a video asset to a shorter, audio-only, corrupt, or incompatible file.
+2. Import a file whose probe fails.
+
+### Expected
+Rushframe probes before committing, preserves the asset ID only after compatibility validation, updates metadata, and rejects unreadable files with a visible error.
+
+### Actual
+Relink retains stale duration/dimensions and import silently registers zero-duration assets after probe failure.
+
+### Impact
+Timeline bounds and export behavior become invalid or misleading.
+
+### Resolution and validation
+Video, audio, and image imports are probed and stream-kind validated before registration. Unreadable, duplicate, corrupt, or incompatible files are skipped with a visible per-file diagnostic rather than becoming zero-duration assets. Relink now probes first, preserves the stable media ID only after confirming the same media kind and enough duration for every used source range, and updates duration/dimensions from the replacement. Tests cover kind changes, short replacements, and files without the required stream.
+
+## QA-NEW-055 - Track replacement and segmented speed operations do not preserve exact render semantics
+
+**Severity:** Critical
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Replace all items on a track that participates in transitions.
+2. Apply a segmented speed curve and split/export the clip.
+
+### Expected
+Transitions remain valid or are removed/restored atomically. Segmented speed is either rendered and split correctly or rejected before committing unsupported state.
+
+### Actual
+Track replacement leaves dangling transitions; exact export ignores `SpeedCurve.Segments`; split uses only constant `item.Speed`.
+
+### Impact
+Saved project state and final output diverge.
+
+### Resolution and validation
+Track replacement now validates all replacement items before mutation, rejects duplicate/cross-track IDs, removes transitions whose endpoints would become invalid, records their exact indices, and restores items and transitions on undo. Split now handles reverse clips and constant speed correctly, partitions local animation/keyframes at the split, preserves right-side identity on redo, and rejects segmented ramps. Because segmented speed curves are not yet implemented in the exact renderer, export also rejects them instead of silently producing a constant-speed result. Focused Domain and Media regressions cover transitions, reverse ranges, animation partitioning, stable redo, and renderer rejection.
+
+## QA-NEW-056 - Intelligence cache advertises failed optional features as complete
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Python validation on 2026-07-15
+
+### Steps
+1. Request transcription/embeddings or another optional feature and force that stage to fail.
+2. Run the same analysis again without `--force`.
+
+### Expected
+The manifest records only successfully completed features, so a later run retries missing work.
+
+### Actual
+The requested feature list is written even when execution falls back or fails.
+
+### Impact
+A degraded analysis bundle can be reused indefinitely as a valid cache.
+
+### Resolution and validation
+The pipeline now separates requested features from successfully completed features and writes only completed work into the manifest. Embedding fallback explicitly removes `embeddings` while retaining the successfully rebuilt non-embedding context index, so a later requested embedding run is retried. A per-destination lock prevents concurrent runs from deleting or publishing over one another and supports stale-lock recovery. Python regressions verify truthful embedding manifests, lock rejection/recovery, bridge URL hardening, and the existing atomic bundle publication; all 16 tests pass.
+
+## QA-NEW-057 - Local asset and composition containment is lexical and audio library discovery is missing
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Debug and Release builds on 2026-07-15
+
+### Steps
+1. Place an asset, preview, entry point, or local renderer beneath a junction that resolves outside its declared root.
+2. Open Creative Assets and look for safe music/SFX acquisition guidance.
+
+### Expected
+Physical paths remain inside local roots after resolving links. Rushframe offers curated external library suggestions that open in the browser for manual download and local import, without downloading or scraping inside the editor.
+
+### Actual
+Several validators use lexical prefixes only, and the asset UI has no guided audio/SFX library workflow.
+
+### Impact
+Local-only boundaries can be bypassed and users lack a safe, license-aware discovery path.
+
+### Resolution and validation
+A shared physical-path guard now follows existing reparse points, rejects lexical and physical root escapes, UNC paths, and mapped network drives. Asset files, previews, extension entry points, composition project directories, Remotion entry points, renderer launchers, and output paths use contained local validation; Windows batch launchers run deliberately through `ComSpec`. Creative Assets includes an Audio Libraries tab, and the dedicated Sound Library window exposes the same curated music/SFX sources through browser-only Browse Libraries actions. Both surfaces explain that Rushframe never downloads or scrapes these sites: the user downloads manually, reviews the exact license/attribution, and imports the validated local file. Junction escape, output containment, external-composition, sound drag/drop, catalog, and UI contract tests pass.
+
+## QA-NEW-058 - Sound Library filtering, indexing, license synchronization, and placement integrity defects
+
+**Severity:** Major
+**Status:** Retest Passed
+**Build:** local Debug working tree on 2026-07-15
+
+### Steps
+1. Register project audio, then apply Favorites, collection, metadata, recent-use, or text filters in Sound Library.
+2. Generate repeated filesystem changes while a watched-folder reindex is running.
+3. Cause a large worker response or diagnostic stream.
+4. Edit catalog license metadata for a registered sound while the project mutation is rejected.
+5. Add a frame-snapped sound and compare the status timestamp with the actual item start.
+6. Attempt to place a registered audio asset whose duration is unknown.
+
+### Expected
+Project fallback rows obey active filters; watched roots coalesce to one active scan plus at most one pending scan; worker output is bounded while reading; catalog/project license metadata remains synchronized; status reports snapped placement time; unknown-duration media is rejected without mutation.
+
+### Actual
+Fallback rows bypass filters, watcher scans can queue repeatedly, output limits are checked only after full buffering, license updates can diverge, status reports the unsnapped input time, and unknown duration becomes an invented ten-second clip.
+
+### Impact
+Search results are misleading, large libraries can cause avoidable resource pressure, licensing/export state can disagree, and timeline placement can report or render incorrect timing.
+
+### Resolution and validation
+Project fallback rows now pass an explicit fallback-query predicate, so active catalog filters cannot be bypassed. Watched roots allow only one active reindex and coalesce filesystem events into at most one pending pass. Python stdout and stderr are bounded while streaming and the process tree is terminated on overflow or cancellation. Catalog license changes update every matching project registration through one composite command and compensate the catalog when the project mutation is rejected. Placement status uses the frame-snapped start, and unknown-duration audio is rejected before creating a track or clip. Focused verification passed: 19 Sound Library C# tests and 12 Python tests. The full Desktop suite completed 198/200 with two unrelated existing UI-contract failures; the full Debug solution build succeeded with 0 warnings and 0 errors. Real WPF import/filter/drag/export listening remains a separate manual QA check.

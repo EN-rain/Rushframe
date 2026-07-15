@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class DuplicateClipCommand : IEditCommand
+public sealed class DuplicateClipCommand : IAtomicEditCommand
 {
     public string Description => $"Duplicate clip {ItemId}";
 
@@ -18,7 +18,7 @@ public sealed class DuplicateClipCommand : IEditCommand
             if (track.Items[idx].Locked) return EditResult.Fail("Item is locked");
 
             var original = track.Items[idx];
-            _duplicate = TimelineItemCloner.Clone(
+            _duplicate ??= TimelineItemCloner.Clone(
                 original,
                 original.TimelineStart.Add(original.Duration));
 
@@ -37,7 +37,6 @@ public sealed class DuplicateClipCommand : IEditCommand
         {
             if (track.Items.Remove(_duplicate))
             {
-                _duplicate = null;
                 return EditResult.Ok();
             }
         }

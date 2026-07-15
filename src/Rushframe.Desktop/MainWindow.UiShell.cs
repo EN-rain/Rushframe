@@ -48,8 +48,6 @@ public partial class MainWindow
         };
         PreviewFreeLayoutButton.Click += (_, _) => TogglePreviewFreeLayout();
         MediaCloseWindowButton.Click += (_, _) => TogglePanel(PanelId.Media);
-        InspectorAddTabButton.Click += (_, _) => ShowInspectorTabMenu();
-        InspectorCloseWindowButton.Click += (_, _) => TogglePanel(PanelId.Inspector);
         UtilityCloseWindowButton.Click += (_, _) => CloseAllUtilityPanels();
         MediaWindowTitleBar.MouseRightButtonUp += (_, args) =>
         {
@@ -80,7 +78,6 @@ public partial class MainWindow
 
         UpdateInspectorFieldColumns();
         UpdateInspectorFooterVisibility();
-        UpdateInspectorTabControls();
         RefreshProjectFolderFilters();
     }
 
@@ -108,26 +105,6 @@ public partial class MainWindow
             Text = title,
             VerticalAlignment = VerticalAlignment.Center,
         });
-        var close = new Button
-        {
-            Content = "×",
-            Width = 20,
-            Height = 20,
-            Margin = new Thickness(5, 0, -3, 0),
-            Padding = new Thickness(0),
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Foreground = (Brush)FindResource("TextMutedBrush"),
-            ToolTip = $"Close {title} tab",
-            Focusable = false,
-        };
-        AutomationProperties.SetName(close, $"Close {title} tab");
-        close.Click += (_, args) =>
-        {
-            CloseInspectorTab(tab);
-            args.Handled = true;
-        };
-        header.Children.Add(close);
         tab.Header = header;
 
         var closeItem = new MenuItem { Header = "Close" };
@@ -147,14 +124,12 @@ public partial class MainWindow
         {
             if (_layout.IsPanelOpen(utility.Id))
                 TogglePanel(utility.Id);
-            UpdateInspectorTabControls();
             return;
         }
 
         tab.Visibility = Visibility.Collapsed;
         SelectFirstVisibleInspectorTab();
         UpdateInspectorFooterVisibility();
-        UpdateInspectorTabControls();
     }
 
     private void ShowInspectorTabMenu()
@@ -166,7 +141,6 @@ public partial class MainWindow
             hiddenCoreTab.Visibility = Visibility.Visible;
             hiddenCoreTab.IsSelected = true;
             StatusText.Text = $"Added {GetTabTitle(hiddenCoreTab)} Inspector tab";
-            UpdateInspectorTabControls();
             return;
         }
 
@@ -175,22 +149,10 @@ public partial class MainWindow
         {
             TogglePanel(closedUtility.Id);
             StatusText.Text = $"Added {GetTabTitle(closedUtility.Tab)} Inspector tab";
-            UpdateInspectorTabControls();
             return;
         }
 
         StatusText.Text = "All Inspector tabs are already open";
-    }
-
-    private void UpdateInspectorTabControls()
-    {
-        var hasHiddenCoreTab = new[] { PropertiesInspectorTab, EffectsInspectorTab, AudioInspectorTab }
-            .Any(tab => tab.Visibility != Visibility.Visible);
-        var hasClosedUtility = GetUtilityPanelEntries().Any(entry => !_layout.IsPanelOpen(entry.Id));
-        InspectorAddTabButton.IsEnabled = hasHiddenCoreTab || hasClosedUtility;
-        InspectorAddTabButton.ToolTip = InspectorAddTabButton.IsEnabled
-            ? "Restore a closed Inspector or utility tab"
-            : "All Inspector tabs are open";
     }
 
     private void ShowPanelTitleMenu(FrameworkElement target, PanelId panelId, string title)
@@ -215,7 +177,6 @@ public partial class MainWindow
             {
                 capturedTab.Visibility = Visibility.Visible;
                 capturedTab.IsSelected = true;
-                UpdateInspectorTabControls();
             };
             menu.Items.Add(addTab);
         }
@@ -606,7 +567,6 @@ public partial class MainWindow
             preferred.IsSelected = true;
         else
             SelectFirstVisibleInspectorTab();
-        UpdateInspectorTabControls();
     }
 
     private void SelectFirstVisibleInspectorTab()

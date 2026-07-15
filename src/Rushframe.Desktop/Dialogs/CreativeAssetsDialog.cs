@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
+using Rushframe.Desktop.Services;
 using Rushframe.Domain;
 using Rushframe.Infrastructure;
 
@@ -77,6 +79,13 @@ internal sealed class CreativeAssetsDialog
         });
         root.Children.Add(header);
 
+        var status = new TextBlock
+        {
+            Foreground = Brush("AccentHoverBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
         var tabs = new TabControl { Background = Brushes.Transparent };
         Grid.SetRow(tabs, 1);
         root.Children.Add(tabs);
@@ -125,6 +134,85 @@ internal sealed class CreativeAssetsDialog
         assetTabRoot.Children.Add(assetInfo);
         tabs.Items.Add(new TabItem { Header = "Assets", Content = assetTabRoot });
 
+        var audioLibrariesRoot = new Grid { Margin = new Thickness(10) };
+        audioLibrariesRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        audioLibrariesRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        audioLibrariesRoot.Children.Add(new TextBlock
+        {
+            Text = "Suggested music and SFX libraries",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        var audioLibraryPanel = new StackPanel();
+        foreach (var recommendation in AudioAssetLibraryCatalog.All)
+        {
+            var card = new Border
+            {
+                Background = Brush("EditorPanelBrush"),
+                BorderBrush = Brush("BorderBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 0, 0, 8),
+            };
+            var cardGrid = new Grid();
+            cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var details = new StackPanel();
+            details.Children.Add(new TextBlock
+            {
+                Text = $"{recommendation.Name} · {recommendation.Category}",
+                FontWeight = FontWeights.SemiBold,
+            });
+            details.Children.Add(new TextBlock
+            {
+                Text = $"Best for: {recommendation.BestFor}\nAccess: {recommendation.Access}\nAttribution: {recommendation.Attribution}\nCommercial use: {recommendation.CommercialUse}\n{recommendation.Guidance}",
+                Foreground = Brush("TextMutedBrush"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 14, 0),
+            });
+            cardGrid.Children.Add(details);
+            var openLibrary = new Button
+            {
+                Content = "Open Library",
+                Style = Style("CommandButtonStyle"),
+                MinWidth = 108,
+                ToolTip = "Open this website in your browser. Rushframe will not download or scrape media.",
+            };
+            openLibrary.Click += (_, _) =>
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(recommendation.Url) { UseShellExecute = true });
+                    status.Text = $"Opened {recommendation.Name}. Download manually, review the exact asset license, then use Import Media.";
+                }
+                catch (Exception exception)
+                {
+                    status.Text = $"Could not open {recommendation.Name}: {exception.Message}";
+                }
+            };
+            Grid.SetColumn(openLibrary, 1);
+            cardGrid.Children.Add(openLibrary);
+            card.Child = cardGrid;
+            audioLibraryPanel.Children.Add(card);
+        }
+        audioLibraryPanel.Children.Add(new TextBlock
+        {
+            Text = "Rushframe does not download from these websites. Save the chosen file locally, preserve license and attribution information, then import it manually into the project.",
+            Foreground = Brush("AccentHoverBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        var audioLibraryScroll = new ScrollViewer
+        {
+            Content = audioLibraryPanel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        Grid.SetRow(audioLibraryScroll, 1);
+        audioLibrariesRoot.Children.Add(audioLibraryScroll);
+        tabs.Items.Add(new TabItem { Header = "Audio Libraries", Content = audioLibrariesRoot });
+
         var extensionRoot = new Grid { Margin = new Thickness(10) };
         extensionRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         extensionRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -155,12 +243,6 @@ internal sealed class CreativeAssetsDialog
         extensionRoot.Children.Add(extensionInfo);
         tabs.Items.Add(new TabItem { Header = "Extensions", Content = extensionRoot });
 
-        var status = new TextBlock
-        {
-            Foreground = Brush("AccentHoverBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
         var footer = new Grid { Margin = new Thickness(0, 12, 0, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

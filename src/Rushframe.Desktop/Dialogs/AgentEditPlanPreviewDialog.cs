@@ -41,6 +41,11 @@ internal sealed class AgentEditPlanPreviewDialog : Window
         root.Children.Add(header);
 
         var tabs = new TabControl();
+        tabs.Items.Add(CreateTab("Creative plan", BuildCreativePlan(plan)));
+        tabs.Items.Add(CreateTab("Quality scores", BuildQualityScores(plan)));
+        tabs.Items.Add(CreateTab($"Quality issues ({plan.QualityIssues.Count})", plan.QualityIssues.Count == 0
+            ? ["No deterministic timeline-quality issues were found."]
+            : plan.QualityIssues.Select(issue => $"{issue.Severity}: {issue.Message}\n{Format(issue.StartSeconds)}–{Format(issue.EndSeconds)}")));
         tabs.Items.Add(CreateTab("Operations", plan.Operations.Select((operation, index) =>
             $"{index + 1}. {operation.Action}\n{operation.Summary}{(string.IsNullOrWhiteSpace(operation.TargetId) ? string.Empty : $"\nTarget: {operation.TargetId}")}")));
         tabs.Items.Add(CreateTab("Affected ranges", plan.AffectedRanges.Select(range =>
@@ -81,6 +86,35 @@ internal sealed class AgentEditPlanPreviewDialog : Window
         root.Children.Add(footer);
         Content = root;
     }
+
+    private static IEnumerable<string> BuildCreativePlan(AgentEditPlanCompilation plan)
+    {
+        yield return $"Objective: {Value(plan.CreativePlan.Objective)}";
+        yield return $"Target duration: {(plan.CreativePlan.TargetDurationSeconds.HasValue ? $"{plan.CreativePlan.TargetDurationSeconds:0.##}s" : "not specified")}";
+        yield return $"Pacing: {Value(plan.CreativePlan.PacingStrategy)}";
+        yield return $"Audio: {Value(plan.CreativePlan.AudioStrategy)}";
+        yield return $"Captions: {Value(plan.CreativePlan.CaptionStrategy)}";
+        yield return $"Prompt: {plan.PromptId} v{plan.PromptVersion}";
+        foreach (var beat in plan.CreativePlan.Beats)
+            yield return $"{beat.Role}  {Format(beat.StartSeconds)}–{Format(beat.EndSeconds)}\n{beat.Message}\nReason: {Value(beat.Reason)}";
+    }
+
+    private static IEnumerable<string> BuildQualityScores(AgentEditPlanCompilation plan)
+    {
+        var scores = plan.QualityScores;
+        yield return $"Overall: {scores.Overall:P0}";
+        yield return $"Brief compliance: {scores.BriefCompliance:P0}";
+        yield return $"Narrative completeness: {scores.NarrativeCompleteness:P0}";
+        yield return $"Continuity: {scores.Continuity:P0}";
+        yield return $"Pacing: {scores.Pacing:P0}";
+        yield return $"Dialogue: {scores.DialogueQuality:P0}";
+        yield return $"Audio: {scores.AudioQuality:P0}";
+        yield return $"Captions: {scores.CaptionQuality:P0}";
+        yield return $"Asset validity: {scores.AssetValidity:P0}";
+        yield return $"Technical validity: {scores.TechnicalValidity:P0}";
+    }
+
+    private static string Value(string value) => string.IsNullOrWhiteSpace(value) ? "not specified" : value;
 
     private static TabItem CreateTab(string title, IEnumerable<string> values)
     {

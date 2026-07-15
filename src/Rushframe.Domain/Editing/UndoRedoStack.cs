@@ -11,14 +11,16 @@ public sealed class UndoRedoStack
 
     public EditResult Execute(Sequence sequence, IEditCommand command)
     {
-        var result = command.Execute(sequence);
-        if (result.Success)
-        {
-            _undoStack.AddLast(command);
-            if (_undoStack.Count > MaxUndoDepth)
-                _undoStack.RemoveFirst();
-            _redoStack.Clear();
-        }
+        ArgumentNullException.ThrowIfNull(sequence);
+        ArgumentNullException.ThrowIfNull(command);
+        var snapshot = command is IAtomicEditCommand ? null : SequenceStateSnapshot.Capture(sequence);
+        var result = InvokeSafely(() => command.Execute(sequence), snapshot, sequence, "execute");
+        if (!result.Success) return result;
+
+        _undoStack.AddLast(command);
+        if (_undoStack.Count > MaxUndoDepth)
+            _undoStack.RemoveFirst();
+        _redoStack.Clear();
         return result;
     }
 
@@ -28,12 +30,12 @@ public sealed class UndoRedoStack
             return EditResult.Fail("Nothing to undo");
 
         var command = _undoStack.Last!.Value;
+        var snapshot = command is IAtomicEditCommand ? null : SequenceStateSnapshot.Capture(sequence);
+        var result = InvokeSafely(() => command.Undo(sequence), snapshot, sequence, "undo");
+        if (!result.Success) return result;
+
         _undoStack.RemoveLast();
-
-        var result = command.Undo(sequence);
-        if (result.Success)
-            _redoStack.AddLast(command);
-
+        _redoStack.AddLast(command);
         return result;
     }
 
@@ -43,13 +45,35 @@ public sealed class UndoRedoStack
             return EditResult.Fail("Nothing to redo");
 
         var command = _redoStack.Last!.Value;
+        var snapshot = command is IAtomicEditCommand ? null : SequenceStateSnapshot.Capture(sequence);
+        var result = InvokeSafely(() => command.Execute(sequence), snapshot, sequence, "redo");
+        if (!result.Success) return result;
+
         _redoStack.RemoveLast();
-
-        var result = command.Execute(sequence);
-        if (result.Success)
-            _undoStack.AddLast(command);
-
+        _undoStack.AddLast(command);
+        if (_undoStack.Count > MaxUndoDepth)
+            _undoStack.RemoveFirst();
         return result;
+    }
+
+    private static EditResult InvokeSafely(
+        Func<EditResult> operation,
+        SequenceStateSnapshot? snapshot,
+        Sequence sequence,
+        string operationName)
+    {
+        try
+        {
+            var result = operation();
+            if (!result.Success && snapshot != null && !snapshot.Matches(sequence))
+                snapshot.Restore(sequence);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            snapshot?.Restore(sequence);
+            return EditResult.Fail($"Command {operationName} failed: {ex.Message}");
+        }
     }
 
     public void Clear()

@@ -126,6 +126,7 @@ public partial class MainWindow
             TransitionKindCombo.SelectedItem = transition?.Kind ?? TransitionKind.CrossDissolve;
             TransitionDurationBox.Text = Format(transition?.Duration.Seconds ?? 0.5);
             TransitionAlignmentBox.Text = Format((transition?.Alignment ?? 0.5) * 100);
+            TransitionAudioModeCombo.SelectedItem = transition?.AudioMode ?? TransitionAudioMode.None;
         }
         finally
         {
@@ -197,6 +198,10 @@ public partial class MainWindow
             PanBox.Text = Format((item?.Pan ?? 0) * 100);
             FadeInBox.Text = Format(item?.FadeInDuration.Seconds ?? 0);
             FadeOutBox.Text = Format(item?.FadeOutDuration.Seconds ?? 0);
+            VisualTransitionInCombo.SelectedItem = item?.VisualTransitionIn ?? ItemTransitionKind.None;
+            VisualTransitionInDurationBox.Text = Format(item?.VisualTransitionInDuration.Seconds ?? 0.35);
+            VisualTransitionOutCombo.SelectedItem = item?.VisualTransitionOut ?? ItemTransitionKind.None;
+            VisualTransitionOutDurationBox.Text = Format(item?.VisualTransitionOutDuration.Seconds ?? 0.35);
 
             var color = item?.ColorCorrection;
             var brightness = color?.Brightness ?? 0;
@@ -461,13 +466,19 @@ public partial class MainWindow
 
         if (profile.ShowFades)
         {
-            if (!TryReadNumber(FadeInBox, "fade in", out var fadeInSeconds)
-                || !TryReadNumber(FadeOutBox, "fade out", out var fadeOutSeconds))
+            if (!TryReadNumber(FadeInBox, "audio fade in", out var fadeInSeconds)
+                || !TryReadNumber(FadeOutBox, "audio fade out", out var fadeOutSeconds)
+                || !TryReadNumber(VisualTransitionInDurationBox, "visual entrance duration", out var visualInSeconds)
+                || !TryReadNumber(VisualTransitionOutDurationBox, "visual exit duration", out var visualOutSeconds))
                 return false;
 
             var maximumFadeSeconds = Math.Max(0, item.Duration.Seconds);
             var clampedFadeInSeconds = Math.Clamp(fadeInSeconds, 0, maximumFadeSeconds);
             var clampedFadeOutSeconds = Math.Clamp(fadeOutSeconds, 0, Math.Max(0, maximumFadeSeconds - clampedFadeInSeconds));
+            var visualIn = VisualTransitionInCombo.SelectedItem is ItemTransitionKind selectedVisualIn ? selectedVisualIn : ItemTransitionKind.None;
+            var visualOut = VisualTransitionOutCombo.SelectedItem is ItemTransitionKind selectedVisualOut ? selectedVisualOut : ItemTransitionKind.None;
+            var clampedVisualInSeconds = visualIn == ItemTransitionKind.None ? 0 : Math.Clamp(visualInSeconds, 0.05, maximumFadeSeconds);
+            var clampedVisualOutSeconds = visualOut == ItemTransitionKind.None ? 0 : Math.Clamp(visualOutSeconds, 0.05, maximumFadeSeconds);
             AddChangedValue(
                 commands,
                 item,
@@ -482,6 +493,10 @@ public partial class MainWindow
                 MediaTime.FromSeconds(clampedFadeOutSeconds),
                 current => current.FadeOutDuration,
                 (current, value) => current.FadeOutDuration = (MediaTime)value!);
+            AddChangedValue(commands, item, nameof(TimelineItem.VisualTransitionIn), visualIn, current => current.VisualTransitionIn, (current, value) => current.VisualTransitionIn = (ItemTransitionKind)value!);
+            AddChangedValue(commands, item, nameof(TimelineItem.VisualTransitionInDuration), MediaTime.FromSeconds(clampedVisualInSeconds), current => current.VisualTransitionInDuration, (current, value) => current.VisualTransitionInDuration = (MediaTime)value!);
+            AddChangedValue(commands, item, nameof(TimelineItem.VisualTransitionOut), visualOut, current => current.VisualTransitionOut, (current, value) => current.VisualTransitionOut = (ItemTransitionKind)value!);
+            AddChangedValue(commands, item, nameof(TimelineItem.VisualTransitionOutDuration), MediaTime.FromSeconds(clampedVisualOutSeconds), current => current.VisualTransitionOutDuration, (current, value) => current.VisualTransitionOutDuration = (MediaTime)value!);
         }
 
         if (profile.ShowAudio)
@@ -596,9 +611,13 @@ public partial class MainWindow
             return false;
         var duration = Math.Clamp(durationValue, 0.05, 10);
         var alignment = Math.Clamp(alignmentPercent / 100, 0, 1);
+        var audioMode = TransitionAudioModeCombo.SelectedItem is TransitionAudioMode selectedAudioMode
+            ? selectedAudioMode
+            : TransitionAudioMode.None;
         var existing = selection.Transition;
         if (existing != null
             && existing.Kind == kind
+            && existing.AudioMode == audioMode
             && InspectorValueLogic.NearlyEqual(existing.Duration.Seconds, duration)
             && InspectorValueLogic.NearlyEqual(existing.Alignment, alignment))
         {
@@ -614,6 +633,7 @@ public partial class MainWindow
                 Kind = kind,
                 Duration = MediaTime.FromSeconds(duration),
                 Alignment = alignment,
+                AudioMode = audioMode,
             }, resolvePendingInspectorChanges: false))
             return false;
 

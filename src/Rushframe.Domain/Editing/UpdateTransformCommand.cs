@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class UpdateTransformCommand : IEditCommand
+public sealed class UpdateTransformCommand : IAtomicEditCommand
 {
     public required TimelineItemId ItemId { get; init; }
     public required Transform2D NewTransform { get; init; }

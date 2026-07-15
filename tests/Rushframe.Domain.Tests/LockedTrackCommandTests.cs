@@ -226,6 +226,93 @@ public sealed class LockedTrackCommandTests
         Assert.Empty(seq.Tracks[0].Items[0].Effects);
     }
 
+    [Fact]
+    public void all_track_mutations_except_lock_toggle_reject_locked_track()
+    {
+        Func<TrackId, Editing.IEditCommand>[] factories =
+        [
+            id => new Editing.DeleteTrackCommand { TrackId = id },
+            id => new Editing.RenameTrackCommand { TrackId = id, NewName = "Renamed" },
+            id => new Editing.ReorderTrackCommand { TrackId = id, NewIndex = 0 },
+            id => new Editing.DuplicateTrackCommand { TrackId = id },
+            id => new Editing.ToggleTrackMuteCommand { TrackId = id },
+            id => new Editing.ToggleTrackSoloCommand { TrackId = id },
+        ];
+
+        foreach (var factory in factories)
+        {
+            var seq = MakeSequence(out _);
+            var track = seq.Tracks[0];
+            track.Name = "Locked";
+            track.Locked = true;
+            var result = factory(track.Id).Execute(seq);
+
+            Assert.False(result.Success);
+            Assert.Single(seq.Tracks);
+            Assert.Equal("Locked", seq.Tracks[0].Name);
+            Assert.False(seq.Tracks[0].Muted);
+            Assert.False(seq.Tracks[0].Solo);
+            Assert.Single(seq.Tracks[0].Items);
+        }
+    }
+
+    [Fact]
+    public void ripple_operations_reject_locked_downstream_item_without_mutation()
+    {
+        Func<Sequence, TimelineItemId, TrackId, Editing.IEditCommand>[] factories =
+        [
+            (sequence, itemId, _) => new Editing.MoveClipCommand
+            {
+                ItemId = itemId,
+                NewTimelineStart = MediaTime.FromSeconds(5),
+                Ripple = new RippleState { Enabled = true },
+            },
+            (_, itemId, trackId) => new Editing.TrimClipCommand
+            {
+                TrackId = trackId,
+                ItemId = itemId,
+                NewDuration = MediaTime.FromSeconds(1),
+                Ripple = new RippleState { Enabled = true },
+            },
+            (_, itemId, _) => new Editing.RippleDeleteClipCommand
+            {
+                ItemId = itemId,
+                Ripple = new RippleState { Enabled = true },
+            },
+        ];
+
+        foreach (var factory in factories)
+        {
+            var sequence = new Sequence();
+            var track = new Track { Kind = TrackKind.Video };
+            var first = new TimelineItem
+            {
+                Kind = ItemKind.Clip,
+                TimelineStart = MediaTime.Zero,
+                Duration = MediaTime.FromSeconds(2),
+                SourceDuration = MediaTime.FromSeconds(2),
+            };
+            var locked = new TimelineItem
+            {
+                Kind = ItemKind.Clip,
+                TimelineStart = MediaTime.FromSeconds(2),
+                Duration = MediaTime.FromSeconds(2),
+                SourceDuration = MediaTime.FromSeconds(2),
+                Locked = true,
+            };
+            track.Items.AddRange([first, locked]);
+            sequence.Tracks.Add(track);
+
+            var result = factory(sequence, first.Id, track.Id).Execute(sequence);
+
+            Assert.False(result.Success);
+            Assert.Equal(2, track.Items.Count);
+            Assert.Equal(MediaTime.Zero, first.TimelineStart);
+            Assert.Equal(2, first.Duration.Seconds, 3);
+            Assert.Equal(2, locked.TimelineStart.Seconds, 3);
+        }
+    }
+
     private static Sequence MakeSequence(out TimelineItemId itemId)
     {
         var seq = new Sequence();

@@ -13,9 +13,17 @@ public sealed class ProjectRepository
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, json);
-        File.Move(temp, path, overwrite: true);
+        var temp = CreateTemporaryPath(path);
+        try
+        {
+            File.WriteAllText(temp, json);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            TryDelete(temp);
+            throw;
+        }
     }
 
     public async Task SaveSerializedAsync(
@@ -26,12 +34,12 @@ public sealed class ProjectRepository
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var temp = path + ".tmp";
+        var temp = CreateTemporaryPath(path);
         try
         {
             await using (var stream = new FileStream(
                              temp,
-                             FileMode.Create,
+                             FileMode.CreateNew,
                              FileAccess.Write,
                              FileShare.None,
                              bufferSize: 64 * 1024,
@@ -47,14 +55,7 @@ public sealed class ProjectRepository
         }
         catch
         {
-            try
-            {
-                if (File.Exists(temp)) File.Delete(temp);
-            }
-            catch
-            {
-                // Keep the original failure.
-            }
+            TryDelete(temp);
             throw;
         }
     }
@@ -67,4 +68,13 @@ public sealed class ProjectRepository
     }
 
     public bool Exists(string path) => File.Exists(path);
+
+    private static string CreateTemporaryPath(string path) =>
+        $"{path}.tmp-{Guid.NewGuid():N}";
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { }
+    }
 }

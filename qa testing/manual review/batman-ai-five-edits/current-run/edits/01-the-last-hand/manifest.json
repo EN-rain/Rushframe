@@ -1,0 +1,120 @@
+{
+  "edit": "Batman: The Last Hand",
+  "slug": "the-last-hand",
+  "concept": "A payoff-first noir-to-color vertical cut driven by local AI transcript meaning, confidence, moment search, and loudness analysis.",
+  "source": "C:\\Users\\LENOVO\\Desktop\\Projectsss\\Rushframe\\batman entry.mov",
+  "source_sha256": "5E9FD47DD03B8B466ECF2BFE41918FD7ABDA987716FCE9B91953A7F242910E23",
+  "source_unchanged": true,
+  "source_clips_centered": true,
+  "analysis": "C:\\Users\\LENOVO\\Desktop\\Projectsss\\Rushframe\\qa testing\\manual review\\batman-ai-five-edits\\current-run\\analysis-the-last-hand\\media-analysis.json",
+  "ai": {
+    "scenes": 1,
+    "transcript_segments": 15,
+    "audio_events": 5,
+    "moments": 1,
+    "warnings": [
+      "word alignment failed: [WinError 2] The system cannot find the file specified",
+      "OCR failed: Engine \u0027paddle_static\u0027 is unavailable because dependency \u0027paddlepaddle\u0027 is not installed."
+    ],
+    "integrated_loudness_lufs": -17.4,
+    "true_peak_db": -0.7,
+    "selected_moment": "moment_0001: All right, it\u0027s my turn to deal. Oh, shit. Get out of my fucking chair. Okay, after this round, Batman, calm down. Calm down, calm down, calm down. Oh my God. My superhero is here, guys. Are you happy to see Batman? Hide me up, chat. Batman in the building. I\u0027m tired of these dealers. All the shit. It\u0027s about time I brought justice to the table. So many if I got here, You go in to fight them for me. \u2014 silence (match 0.255)",
+    "selected_beats": [
+      {
+        "Role": "cold-open",
+        "segment_id": "transcript_0013",
+        "source_start": 24.49,
+        "source_duration": 1.55,
+        "transcript": "I brought justice to the table.",
+        "Confidence": 0.9526712397734324,
+        "Caption": "JUSTICE. TO THE TABLE."
+      },
+      {
+        "Role": "deal",
+        "segment_id": "transcript_0001",
+        "source_start": 0,
+        "source_duration": 1.7,
+        "transcript": "All right, it\u0027s my turn to deal.",
+        "Confidence": 0.8329361517514501,
+        "Caption": "ONE LAST HAND."
+      },
+      {
+        "Role": "conflict",
+        "segment_id": "transcript_0003",
+        "source_start": 3.48,
+        "source_duration": 1.44,
+        "transcript": "Get out of my fucking chair.",
+        "Confidence": 0.9553324580192566,
+        "Caption": "WRONG CHAIR."
+      },
+      {
+        "Role": "escalation",
+        "segment_id": "transcript_0004",
+        "source_start": 5.9,
+        "source_duration": 1.44,
+        "transcript": "Okay, after this round, Batman, calm down.",
+        "Confidence": 0.9147107090268817,
+        "Caption": "CALM DOWN?"
+      },
+      {
+        "Role": "reveal",
+        "segment_id": "transcript_0007",
+        "source_start": 11.1,
+        "source_duration": 1.38,
+        "transcript": "My superhero is here, guys.",
+        "Confidence": 0.9503514051437378,
+        "Caption": "THE HERO ARRIVES."
+      },
+      {
+        "Role": "entrance",
+        "segment_id": "transcript_0010",
+        "source_start": 18.54,
+        "source_duration": 1.14,
+        "transcript": "Batman in the building.",
+        "Confidence": 0.9790461212396622,
+        "Caption": "BATMAN IN THE BUILDING."
+      },
+      {
+        "Role": "resolve",
+        "segment_id": "transcript_0011",
+        "source_start": 20.5,
+        "source_duration": 1.08,
+        "transcript": "I\u0027m tired of these dealers.",
+        "Confidence": 0.9927622973918915,
+        "Caption": "HE\u0027S DONE WITH DEALERS."
+      },
+      {
+        "Role": "finale",
+        "segment_id": "transcript_0013",
+        "source_start": 24.16,
+        "source_duration": 1.88,
+        "transcript": "I brought justice to the table.",
+        "Confidence": 0.9526712397734324,
+        "Caption": "IT\u0027S ABOUT TIME..."
+      }
+    ]
+  },
+  "project": "C:\\Users\\LENOVO\\Desktop\\Projectsss\\Rushframe\\qa testing\\manual review\\batman-ai-five-edits\\current-run\\edits\\01-the-last-hand\\the-last-hand.rushframe",
+  "project_revision": 2,
+  "output": "C:\\Users\\LENOVO\\Desktop\\Projectsss\\Rushframe\\qa testing\\manual review\\batman-ai-five-edits\\current-run\\edits\\01-the-last-hand\\the-last-hand.mp4",
+  "output_sha256": "1BDDEA23D84DEBBB44C88A073FA7E23C57D527F446FAF5747D9A82BBC4A00654",
+  "output_bytes": 2575133,
+  "duration_seconds": 12.108108333333334,
+  "width": 720,
+  "height": 1280,
+  "fps": 30,
+  "video_codec": "h264 (High) (avc1 / 0x31637661)",
+  "audio_codec": "aac (LC) (mp4a / 0x6134706D)",
+  "audio_channels": 2,
+  "sample_rate": 48000,
+  "tracks": 4,
+  "items": 28,
+  "markers": 8,
+  "transitions": 6,
+  "full_decode": true,
+  "evidence_frames": [
+    "the-last-hand-start.jpg",
+    "the-last-hand-mid.jpg",
+    "the-last-hand-end.jpg"
+  ]
+}

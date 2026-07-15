@@ -41,6 +41,8 @@ public sealed partial class FfmpegMediaService
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
 
         ValidateRenderCapabilities(sequence);
+        ValidateSourceAvailability(project, sequence);
+        ValidateOutputPath(project, outputPath);
 
         var renderWidth = EnsureEven(Math.Max(2, outputWidth ?? sequence.Width));
         var renderHeight = EnsureEven(Math.Max(2, outputHeight ?? sequence.Height));
@@ -54,13 +56,17 @@ public sealed partial class FfmpegMediaService
         var transitionWindows = BuildTransitionWindows(sequence);
         var options = exportOptions ?? InferExportOptions(outputPath);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+        var outputFullPath = Path.GetFullPath(outputPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(outputFullPath)!);
+        var temporaryOutputPath = Path.Combine(
+            Path.GetDirectoryName(outputFullPath)!,
+            $".{Path.GetFileNameWithoutExtension(outputFullPath)}.{Guid.NewGuid():N}.rendering{Path.GetExtension(outputFullPath)}");
         progress?.Report(new MediaJobProgress(0, "Building timeline render graph"));
 
         var temporaryTextFiles = new List<string>();
         try
         {
-        var arguments = new List<string> { "-y" };
+        var arguments = new List<string> { "-n" };
         var visualInputs = new Dictionary<TimelineItemId, VisualInput>();
         var inputIndex = 0;
 
@@ -143,6 +149,7 @@ public sealed partial class FfmpegMediaService
                 var textOverlayX = BuildOverlayPositionExpression(item, AnimationPropertyNames.PositionX, item.Transform.PositionX, "main_w", "overlay_w");
                 var textOverlayY = BuildOverlayPositionExpression(item, AnimationPropertyNames.PositionY, item.Transform.PositionY, "main_h", "overlay_h");
                 ApplyTransitionPosition(ref textOverlayX, ref textOverlayY, rightTransition, sequence);
+                ApplyItemTransitionPosition(ref textOverlayX, ref textOverlayY, item, $"(t-{FormatNumber(item.TimelineStart.Seconds)})", sequence);
                 var textEnable = $"between(t,{FormatNumber(rightTransition?.Start ?? item.TimelineStart.Seconds)},{FormatNumber(item.TimelineEnd.Seconds)})";
                 var output = $"text{layerNumber}";
                 var textBlendMode = BlendModeToFfmpeg(item.BlendMode);
@@ -173,7 +180,9 @@ public sealed partial class FfmpegMediaService
             var scaleX = BuildAnimatedExpression(item, AnimationPropertyNames.ScaleX, item.Transform.ScaleX, localTime);
             var scaleY = BuildAnimatedExpression(item, AnimationPropertyNames.ScaleY, item.Transform.ScaleY, localTime);
             ApplyTransitionScale(ref scaleX, ref scaleY, visualInput.Window.RightTransition);
+            ApplyItemTransitionScale(ref scaleX, ref scaleY, item, localTime);
             var rotation = BuildAnimatedExpression(item, AnimationPropertyNames.Rotation, item.Transform.RotationDegrees, localTime);
+            rotation = ApplyItemTransitionRotation(rotation, item, localTime);
 
             var videoFilters = new List<string>
             {
@@ -218,6 +227,7 @@ public sealed partial class FfmpegMediaService
             var overlayX = BuildOverlayPositionExpression(item, AnimationPropertyNames.PositionX, item.Transform.PositionX, "main_w", "overlay_w");
             var overlayY = BuildOverlayPositionExpression(item, AnimationPropertyNames.PositionY, item.Transform.PositionY, "main_h", "overlay_h");
             ApplyTransitionPosition(ref overlayX, ref overlayY, visualInput.Window.RightTransition, sequence);
+            ApplyItemTransitionPosition(ref overlayX, ref overlayY, item, localTime, sequence);
             var enable = $"between(t,{FormatNumber(visualInput.Window.RenderStart)},{FormatNumber(visualInput.Window.RenderEnd)})";
             var blendMode = BlendModeToFfmpeg(item.BlendMode);
 
@@ -278,14 +288,19 @@ public sealed partial class FfmpegMediaService
             arguments.Add("-t");
             arguments.Add(FormatNumber(renderDuration));
         }
-        ConfigureOutput(arguments, sequence, options, audioOutput != null, outputPath);
+        ConfigureOutput(arguments, sequence, options, audioOutput != null, temporaryOutputPath);
 
         progress?.Report(new MediaJobProgress(5, "Rendering timeline"));
         await RunAsync(_ffmpegPath, arguments, cancellationToken);
+        if (!File.Exists(temporaryOutputPath) || new FileInfo(temporaryOutputPath).Length == 0)
+            throw new InvalidDataException("FFmpeg completed without producing a usable temporary export.");
+        File.Move(temporaryOutputPath, outputFullPath, overwrite: true);
         progress?.Report(new MediaJobProgress(100, "Timeline export complete"));
         }
         finally
         {
+            try { File.Delete(temporaryOutputPath); }
+            catch { }
             foreach (var textFilePath in temporaryTextFiles)
             {
                 try { File.Delete(textFilePath); }
@@ -334,21 +349,109 @@ public sealed partial class FfmpegMediaService
             .ToArray();
         if (unsupportedMasks.Length > 0)
             throw new NotSupportedException($"Unsupported render masks: {string.Join(", ", unsupportedMasks)}");
+
+        var segmentedSpeedItems = sequence.Tracks.SelectMany(track => track.Items)
+            .Where(item => item.SpeedCurve?.Segments.Count > 0)
+            .Select(item => item.Id)
+            .ToArray();
+        if (segmentedSpeedItems.Length > 0)
+        {
+            throw new NotSupportedException(
+                $"Segmented speed curves are not yet supported by the exact renderer: {string.Join(", ", segmentedSpeedItems)}");
+        }
     }
 
-    private static List<VisualEntry> BuildVisualEntries(Project project, Sequence sequence) =>
-        sequence.Tracks
-            .Where(track => track.Kind is TrackKind.Video or TrackKind.Overlay or TrackKind.Text && !track.Hidden)
-            .OrderBy(track => track.Order)
+    private static void ValidateSourceAvailability(Project project, Sequence sequence)
+    {
+        var hasSoloTracks = sequence.Tracks.Any(track => track.Solo && !track.Hidden);
+        foreach (var track in sequence.Tracks.Where(track => !track.Hidden && (!hasSoloTracks || track.Solo)))
+        {
+            var visualTrack = track.Kind is TrackKind.Video or TrackKind.Overlay or TrackKind.Text;
+            var audibleTrack = track.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice;
+            if (!visualTrack && !audibleTrack) continue;
+
+            foreach (var item in track.Items)
+            {
+                var needsVisualSource = visualTrack
+                                        && item.Kind is ItemKind.Clip or ItemKind.Image or ItemKind.Sticker
+                                        && !IsBuiltInSticker(item);
+                var needsAudioSource = audibleTrack && !track.Muted && !item.Muted;
+                if (!needsVisualSource && !needsAudioSource) continue;
+
+                if (item.MediaAssetId is not { } assetId)
+                    throw new InvalidDataException($"Timeline item {item.Id} has no registered source media.");
+
+                var asset = project.MediaLibrary.FirstOrDefault(candidate => candidate.Id == assetId);
+                if (asset == null
+                    || asset.IsOffline
+                    || string.IsNullOrWhiteSpace(asset.OriginalPath)
+                    || !File.Exists(asset.OriginalPath))
+                {
+                    throw new FileNotFoundException(
+                        $"Timeline item {item.Id} references unavailable source media.",
+                        asset?.OriginalPath);
+                }
+
+                if (needsVisualSource && asset.Kind is not (MediaKind.Video or MediaKind.Image))
+                    throw new InvalidDataException($"Timeline item {item.Id} requires visual media but references {asset.Kind}.");
+                if (needsAudioSource && asset.Kind is not (MediaKind.Audio or MediaKind.Video))
+                    throw new InvalidDataException($"Timeline item {item.Id} requires audible media but references {asset.Kind}.");
+
+                ValidateSourceBounds(item, asset);
+            }
+        }
+    }
+
+    private static void ValidateSourceBounds(TimelineItem item, MediaAsset asset)
+    {
+        if (item.TimelineStart.Seconds < 0)
+            throw new InvalidDataException($"Timeline item {item.Id} starts before timeline zero.");
+        if (item.Duration.Seconds <= 0)
+            throw new InvalidDataException($"Timeline item {item.Id} has a non-positive duration.");
+        if (item.SourceStart.Seconds < 0 || item.SourceDuration.Seconds < 0)
+            throw new InvalidDataException($"Timeline item {item.Id} has invalid source bounds.");
+        if (asset.Kind == MediaKind.Image || asset.Duration.Seconds <= 0) return;
+
+        const double tolerance = 0.05;
+        if (item.SourceStart.Seconds > asset.Duration.Seconds + tolerance)
+            throw new InvalidDataException($"Timeline item {item.Id} starts beyond the end of its source media.");
+        if (item.SourceDuration.Seconds > 0
+            && item.SourceStart.Seconds + item.SourceDuration.Seconds > asset.Duration.Seconds + tolerance)
+        {
+            throw new InvalidDataException($"Timeline item {item.Id} exceeds the duration of its source media.");
+        }
+    }
+
+    private static void ValidateOutputPath(Project project, string outputPath)
+    {
+        var normalizedOutput = Path.GetFullPath(outputPath);
+        var registeredSources = project.MediaLibrary.Select(asset => asset.OriginalPath)
+            .Concat(project.AssetProviders.SelectMany(provider => provider.Assets).Select(asset => asset.LocalPath));
+        if (registeredSources.Any(path => !string.IsNullOrWhiteSpace(path)
+                                         && string.Equals(normalizedOutput, Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("Export output must not overwrite a registered source asset.");
+        }
+    }
+
+    private static List<VisualEntry> BuildVisualEntries(Project project, Sequence sequence)
+    {
+        var hasSoloTracks = sequence.Tracks.Any(track => track.Solo && !track.Hidden);
+        return sequence.Tracks
+            .Where(track =>
+                track.Kind is TrackKind.Video or TrackKind.Overlay or TrackKind.Text
+                && !track.Hidden
+                && (!hasSoloTracks || track.Solo))
             .SelectMany(track => track.Items.Select(item => new VisualEntry(
                 track,
                 item,
                 ResolveVisualSource(project, item),
                 IsImageSource(project, item))))
             .Where(entry => entry.Item.Kind is ItemKind.Clip or ItemKind.Image or ItemKind.Text or ItemKind.Sticker or ItemKind.AdjustmentLayer)
-            .OrderBy(entry => entry.Track.Order)
+            .OrderBy(entry => sequence.Tracks.IndexOf(entry.Track))
             .ThenBy(entry => entry.Item.TimelineStart.Ticks)
             .ToList();
+    }
 
     private static string? ResolveVisualSource(Project project, TimelineItem item)
     {
@@ -396,9 +499,13 @@ public sealed partial class FfmpegMediaService
         IReadOnlyList<VisualEntry> visualEntries,
         CancellationToken cancellationToken)
     {
+        var hasSoloTracks = sequence.Tracks.Any(track => track.Solo && !track.Hidden);
         var entries = sequence.Tracks
-            .Where(track => track.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice && !track.Hidden && !track.Muted)
-            .OrderBy(track => track.Order)
+            .Where(track =>
+                track.Kind is TrackKind.Audio or TrackKind.Music or TrackKind.Voice
+                && !track.Hidden
+                && !track.Muted
+                && (!hasSoloTracks || track.Solo))
             .SelectMany(track => track.Items.Select(item => new { track, item }))
             .Where(entry => entry.item.MediaAssetId.HasValue && !entry.item.Muted)
             .Select(entry =>
@@ -419,13 +526,21 @@ public sealed partial class FfmpegMediaService
             try
             {
                 var probe = await ProbeAsync(visual.SourcePath!, cancellationToken);
+                if (!probe.HasVideo)
+                    throw new InvalidDataException($"Media probe returned no video stream for '{visual.SourcePath}'.");
                 if (!probe.HasAudio) continue;
                 entries.Add(new AudioEntry(visual.Track, visual.Item, visual.SourcePath!));
                 existingIds.Add(visual.Item.Id);
             }
-            catch
+            catch (OperationCanceledException)
             {
-                // Visual rendering remains useful if an optional audio probe fails.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Could not determine whether embedded audio is available for '{visual.SourcePath}'. Export was stopped to avoid silently dropping audio.",
+                    ex);
             }
         }
 
@@ -588,18 +703,23 @@ public sealed partial class FfmpegMediaService
             ref scaleY,
             rightTransition,
             rightTransition == null ? "t" : $"(t-{FormatNumber(rightTransition.Start)})");
+        ApplyItemTransitionScale(ref scaleX, ref scaleY, item, localTime);
         var rotation = BuildAnimatedExpression(item, AnimationPropertyNames.Rotation, item.Transform.RotationDegrees, localTime);
+        rotation = ApplyItemTransitionRotation(rotation, item, localTime);
         var textFilters = new List<string>
         {
             $"scale=w='max(2,iw*({scaleX}))':h='max(2,ih*({scaleY}))':eval=frame",
         };
-        if (item.GetAnimationChannel(AnimationPropertyNames.Rotation) != null || Math.Abs(item.Transform.RotationDegrees) > 0.0001)
+        if (item.GetAnimationChannel(AnimationPropertyNames.Rotation) != null
+            || Math.Abs(item.Transform.RotationDegrees) > 0.0001
+            || IsSpinTransition(item.VisualTransitionIn)
+            || IsSpinTransition(item.VisualTransitionOut))
             textFilters.Add($"rotate='({rotation})*PI/180':ow=rotw(iw):oh=roth(ih):c=none");
         AppendCoreVisualEffects(textFilters, item);
 
         var alphaTime = $"(T-{FormatNumber(item.TimelineStart.Seconds)})";
         var opacity = BuildAnimatedExpression(item, AnimationPropertyNames.Opacity, item.Opacity, alphaTime);
-        opacity = MultiplyExpression(opacity, BuildItemFadeExpression(item, alphaTime));
+        opacity = MultiplyExpression(opacity, BuildItemTransitionAlphaExpression(item, alphaTime));
         foreach (var mask in item.Masks)
             opacity = MultiplyExpression(opacity, BuildMaskExpression(mask));
         if (rightTransition != null && rightTransition.Transition.Kind is TransitionKind.CrossDissolve or TransitionKind.Zoom or TransitionKind.Blur or TransitionKind.Mask)
@@ -745,7 +865,7 @@ public sealed partial class FfmpegMediaService
     private static string BuildAlphaExpression(TimelineItem item, VisualWindow window, string localTime)
     {
         var expression = BuildAnimatedExpression(item, AnimationPropertyNames.Opacity, item.Opacity, localTime);
-        expression = MultiplyExpression(expression, BuildItemFadeExpression(item, localTime));
+        expression = MultiplyExpression(expression, BuildItemTransitionAlphaExpression(item, localTime));
         foreach (var mask in item.Masks)
             expression = MultiplyExpression(expression, BuildMaskExpression(mask));
 
@@ -936,6 +1056,121 @@ public sealed partial class FfmpegMediaService
         scaleY = $"({scaleY})*({factor})";
     }
 
+    private static void ApplyItemTransitionScale(
+        ref string scaleX,
+        ref string scaleY,
+        TimelineItem item,
+        string localTime)
+    {
+        var factor = "1";
+        if (item.VisualTransitionIn != ItemTransitionKind.None && item.VisualTransitionInDuration.Seconds > 0)
+        {
+            var progress = $"clip(({localTime})/{FormatNumber(item.VisualTransitionInDuration.Seconds)},0,1)";
+            factor = MultiplyExpression(factor, item.VisualTransitionIn switch
+            {
+                ItemTransitionKind.ZoomIn => $"0.72+0.28*({progress})",
+                ItemTransitionKind.ZoomOut => $"1.28-0.28*({progress})",
+                ItemTransitionKind.Pop => $"0.68+0.44*({progress})-0.12*({progress})*({progress})",
+                _ => "1",
+            });
+        }
+        if (item.VisualTransitionOut != ItemTransitionKind.None && item.VisualTransitionOutDuration.Seconds > 0)
+        {
+            var remaining = $"clip(({FormatNumber(item.Duration.Seconds)}-({localTime}))/{FormatNumber(item.VisualTransitionOutDuration.Seconds)},0,1)";
+            factor = MultiplyExpression(factor, item.VisualTransitionOut switch
+            {
+                ItemTransitionKind.ZoomIn => $"1.28-0.28*({remaining})",
+                ItemTransitionKind.ZoomOut => $"0.72+0.28*({remaining})",
+                ItemTransitionKind.Pop => $"0.68+0.32*({remaining})",
+                _ => "1",
+            });
+        }
+        if (factor == "1") return;
+        scaleX = $"({scaleX})*({factor})";
+        scaleY = $"({scaleY})*({factor})";
+    }
+
+    private static void ApplyItemTransitionPosition(
+        ref string x,
+        ref string y,
+        TimelineItem item,
+        string localTime,
+        Sequence sequence)
+    {
+        if (item.VisualTransitionIn != ItemTransitionKind.None && item.VisualTransitionInDuration.Seconds > 0)
+        {
+            var progress = $"clip(({localTime})/{FormatNumber(item.VisualTransitionInDuration.Seconds)},0,1)";
+            ApplySlideOffset(ref x, ref y, item.VisualTransitionIn, $"1-({progress})", sequence);
+        }
+        if (item.VisualTransitionOut != ItemTransitionKind.None && item.VisualTransitionOutDuration.Seconds > 0)
+        {
+            var remaining = $"clip(({FormatNumber(item.Duration.Seconds)}-({localTime}))/{FormatNumber(item.VisualTransitionOutDuration.Seconds)},0,1)";
+            ApplySlideOffset(ref x, ref y, item.VisualTransitionOut, $"1-({remaining})", sequence);
+        }
+    }
+
+    private static void ApplySlideOffset(ref string x, ref string y, ItemTransitionKind kind, string amount, Sequence sequence)
+    {
+        switch (kind)
+        {
+            case ItemTransitionKind.SlideLeft: x = $"({x})-{sequence.Width}*({amount})"; break;
+            case ItemTransitionKind.SlideRight: x = $"({x})+{sequence.Width}*({amount})"; break;
+            case ItemTransitionKind.SlideUp: y = $"({y})-{sequence.Height}*({amount})"; break;
+            case ItemTransitionKind.SlideDown: y = $"({y})+{sequence.Height}*({amount})"; break;
+        }
+    }
+
+    private static string ApplyItemTransitionRotation(string rotation, TimelineItem item, string localTime)
+    {
+        var expression = rotation;
+        if (IsSpinTransition(item.VisualTransitionIn) && item.VisualTransitionInDuration.Seconds > 0)
+        {
+            var progress = $"clip(({localTime})/{FormatNumber(item.VisualTransitionInDuration.Seconds)},0,1)";
+            var direction = item.VisualTransitionIn == ItemTransitionKind.SpinClockwise ? 1 : -1;
+            expression = $"({expression})+{360 * direction}*(1-({progress}))";
+        }
+        if (IsSpinTransition(item.VisualTransitionOut) && item.VisualTransitionOutDuration.Seconds > 0)
+        {
+            var remaining = $"clip(({FormatNumber(item.Duration.Seconds)}-({localTime}))/{FormatNumber(item.VisualTransitionOutDuration.Seconds)},0,1)";
+            var direction = item.VisualTransitionOut == ItemTransitionKind.SpinClockwise ? 1 : -1;
+            expression = $"({expression})+{360 * direction}*(1-({remaining}))";
+        }
+        return expression;
+    }
+
+    private static string BuildItemTransitionAlphaExpression(TimelineItem item, string localTime)
+    {
+        var expression = "1";
+        if (item.VisualTransitionIn != ItemTransitionKind.None && item.VisualTransitionInDuration.Seconds > 0)
+        {
+            var progress = $"clip(({localTime})/{FormatNumber(item.VisualTransitionInDuration.Seconds)},0,1)";
+            expression = item.VisualTransitionIn switch
+            {
+                ItemTransitionKind.Fade or ItemTransitionKind.ZoomIn or ItemTransitionKind.ZoomOut or ItemTransitionKind.Pop
+                    or ItemTransitionKind.SpinClockwise or ItemTransitionKind.SpinCounterClockwise => MultiplyExpression(expression, progress),
+                ItemTransitionKind.WipeLeft => MultiplyExpression(expression, $"gte(X,W*(1-({progress})))"),
+                ItemTransitionKind.WipeRight => MultiplyExpression(expression, $"lte(X,W*({progress}))"),
+                _ => expression,
+            };
+        }
+        if (item.VisualTransitionOut != ItemTransitionKind.None && item.VisualTransitionOutDuration.Seconds > 0)
+        {
+            var remaining = $"clip(({FormatNumber(item.Duration.Seconds)}-({localTime}))/{FormatNumber(item.VisualTransitionOutDuration.Seconds)},0,1)";
+            expression = item.VisualTransitionOut switch
+            {
+                ItemTransitionKind.Fade or ItemTransitionKind.ZoomIn or ItemTransitionKind.ZoomOut or ItemTransitionKind.Pop
+                    or ItemTransitionKind.SpinClockwise or ItemTransitionKind.SpinCounterClockwise => MultiplyExpression(expression, remaining),
+                ItemTransitionKind.WipeLeft => MultiplyExpression(expression, $"lte(X,W*({remaining}))"),
+                ItemTransitionKind.WipeRight => MultiplyExpression(expression, $"gte(X,W*(1-({remaining})))"),
+                _ => expression,
+            };
+        }
+        return expression;
+    }
+
+    private static bool IsSpinTransition(ItemTransitionKind kind) =>
+        kind is ItemTransitionKind.SpinClockwise or ItemTransitionKind.SpinCounterClockwise;
+
     private static string? BuildAudioGraph(
         List<string> filters,
         IReadOnlyList<AudioInput> inputs,
@@ -950,6 +1185,8 @@ public sealed partial class FfmpegMediaService
             var item = input.Entry.Item;
             transitions.Left.TryGetValue(item.Id, out var leftTransition);
             transitions.Right.TryGetValue(item.Id, out var rightTransition);
+            if (leftTransition?.Transition.AudioMode != TransitionAudioMode.Crossfade) leftTransition = null;
+            if (rightTransition?.Transition.AudioMode != TransitionAudioMode.Crossfade) rightTransition = null;
             var speed = Math.Clamp(item.SpeedCurve?.ConstantSpeed ?? item.Speed, 0.1, 100);
             var renderStart = rightTransition?.Start ?? item.TimelineStart.Seconds;
             var renderEnd = Math.Max(item.TimelineEnd.Seconds, leftTransition?.End ?? item.TimelineEnd.Seconds);

@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using Rushframe.Desktop.Controllers;
 using Rushframe.Desktop.Dialogs;
 using Rushframe.Desktop.Panels;
+using Rushframe.Desktop.Services;
 using Rushframe.Domain;
 using Rushframe.Domain.Editing;
 using Rushframe.Domain.Serialization;
@@ -18,6 +19,7 @@ namespace Rushframe.Desktop;
 public partial class MainWindow
 {
     private readonly ObservableCollection<WorkflowStageListItem> _workflowStageItems = [];
+    private readonly ObservableCollection<CampaignTaskListItem> _campaignTaskItems = [];
     private readonly ObservableCollection<TranscriptAssetListItem> _transcriptAssetItems = [];
     private readonly ObservableCollection<TranscriptSegmentListItem> _transcriptSegmentItems = [];
     private readonly ObservableCollection<OutputVariantListItem> _outputVariantItems = [];
@@ -31,6 +33,7 @@ public partial class MainWindow
         _automationPanelsInitialized = true;
 
         WorkflowStageList.ItemsSource = _workflowStageItems;
+        CampaignTaskList.ItemsSource = _campaignTaskItems;
         TranscriptAssetCombo.ItemsSource = _transcriptAssetItems;
         TranscriptSegmentList.ItemsSource = _transcriptSegmentItems;
         OutputVariantList.ItemsSource = _outputVariantItems;
@@ -38,6 +41,18 @@ public partial class MainWindow
         GeneratedCompositionList.ItemsSource = _generatedCompositionItems;
 
         WorkflowRefreshButton.Click += (_, _) => RefreshAutomationPanels();
+        SaveCampaignDescriptionButton.Click += (_, _) => SaveCampaignDescription();
+        EditEditingBriefButton.Click += (_, _) => EditEditingBrief();
+        AddCampaignTaskButton.Click += (_, _) => AddCampaignTask();
+        ToggleCampaignTaskButton.Click += (_, _) => ToggleSelectedCampaignTask();
+        DeleteCampaignTaskButton.Click += (_, _) => DeleteSelectedCampaignTask();
+        CampaignTaskInput.KeyDown += (_, args) =>
+        {
+            if (args.Key != System.Windows.Input.Key.Enter) return;
+            AddCampaignTask();
+            args.Handled = true;
+        };
+        CampaignTaskList.SelectionChanged += (_, _) => UpdateCampaignTaskButtons();
         WorkflowApproveButton.Click += (_, _) => SetSelectedWorkflowStage(approve: true, complete: false, reset: false);
         WorkflowCompleteButton.Click += (_, _) => SetSelectedWorkflowStage(approve: false, complete: true, reset: false);
         WorkflowResetButton.Click += (_, _) => SetSelectedWorkflowStage(approve: false, complete: false, reset: true);
@@ -77,6 +92,18 @@ public partial class MainWindow
     private void RefreshWorkflowPanel()
     {
         _project.Workflow.EnsureDefaults();
+        CampaignDescriptionBox.Text = _project.CampaignDescription;
+        var selectedTaskId = (CampaignTaskList.SelectedItem as CampaignTaskListItem)?.Task.Id;
+        _campaignTaskItems.Clear();
+        foreach (var task in _project.Tasks)
+        {
+            var taskItem = new CampaignTaskListItem(task);
+            _campaignTaskItems.Add(taskItem);
+            if (selectedTaskId.HasValue && task.Id == selectedTaskId.Value)
+                CampaignTaskList.SelectedItem = taskItem;
+        }
+        CampaignTaskList.SelectedItem ??= _campaignTaskItems.FirstOrDefault();
+        UpdateCampaignTaskButtons();
         var selectedId = (WorkflowStageList.SelectedItem as WorkflowStageListItem)?.Stage.Id;
         _workflowStageItems.Clear();
         for (var index = 0; index < _project.Workflow.Stages.Count; index++)
@@ -87,8 +114,72 @@ public partial class MainWindow
         }
         WorkflowStageList.SelectedItem ??= _workflowStageItems.FirstOrDefault(item => item.Stage.Id == _project.Workflow.ActiveStageId)
                                                   ?? _workflowStageItems.FirstOrDefault();
-        WorkflowStatusText.Text = $"Active: {_project.Workflow.ActiveStageId}  •  Decisions: {_project.Workflow.Decisions.Count}  •  "
+        WorkflowStatusText.Text = $"Active: {_project.Workflow.ActiveStageId}  •  Tasks: {_project.Tasks.Count(task => task.IsCompleted)}/{_project.Tasks.Count}  •  Decisions: {_project.Workflow.Decisions.Count}  •  "
                                   + $"Budget: {FormatBudget(_project.Workflow.ActualSpendUsd, _project.Workflow.BudgetLimitUsd)}";
+    }
+
+    private void SaveCampaignDescription()
+    {
+        if (Execute(new UpdateCampaignDescriptionCommand(_project, CampaignDescriptionBox.Text)))
+        {
+            RefreshWorkflowPanel();
+            StatusText.Text = "Campaign description saved";
+        }
+    }
+
+    private void EditEditingBrief()
+    {
+        var dialog = new EditingBriefDialog(this, _project.EditingBrief);
+        if (dialog.ShowDialog() != true) return;
+        if (Execute(new UpdateEditingBriefCommand(_project, dialog.Result)))
+        {
+            RefreshWorkflowPanel();
+            StatusText.Text = "Structured editing brief saved";
+        }
+    }
+
+    private void AddCampaignTask()
+    {
+        var title = CampaignTaskInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            StatusText.Text = "Enter a task title first";
+            return;
+        }
+        if (Execute(new AddCampaignTaskCommand(_project, new CampaignTask { Title = title })))
+        {
+            CampaignTaskInput.Clear();
+            RefreshWorkflowPanel();
+            CampaignTaskList.SelectedItem = _campaignTaskItems.LastOrDefault();
+            StatusText.Text = "Campaign task added";
+        }
+    }
+
+    private void ToggleSelectedCampaignTask()
+    {
+        if (CampaignTaskList.SelectedItem is not CampaignTaskListItem selected) return;
+        if (Execute(new UpdateCampaignTaskCommand(_project, selected.Task.Id, isCompleted: !selected.Task.IsCompleted)))
+        {
+            RefreshWorkflowPanel();
+            StatusText.Text = selected.Task.IsCompleted ? "Campaign task completed" : "Campaign task reopened";
+        }
+    }
+
+    private void DeleteSelectedCampaignTask()
+    {
+        if (CampaignTaskList.SelectedItem is not CampaignTaskListItem selected) return;
+        if (Execute(new DeleteCampaignTaskCommand(_project, selected.Task.Id)))
+        {
+            RefreshWorkflowPanel();
+            StatusText.Text = "Campaign task removed";
+        }
+    }
+
+    private void UpdateCampaignTaskButtons()
+    {
+        var hasSelection = CampaignTaskList.SelectedItem is CampaignTaskListItem;
+        ToggleCampaignTaskButton.IsEnabled = hasSelection;
+        DeleteCampaignTaskButton.IsEnabled = hasSelection;
     }
 
     private void SetSelectedWorkflowStage(bool approve, bool complete, bool reset)
@@ -337,70 +428,8 @@ public partial class MainWindow
         OpenRenderReceiptButton.IsEnabled = _renderReceiptItems.Count > 0;
     }
 
-    private (Project Project, Sequence Sequence) CreateVariantRenderContext(ExportVariant variant)
-    {
-        var clone = ProjectSerializer.Deserialize(ProjectSerializer.Serialize(_project));
-        var sequence = variant.SequenceId is { } sequenceId
-            ? clone.Sequences.FirstOrDefault(candidate => candidate.Id == sequenceId)
-            : clone.MainSequence;
-        if (sequence == null) throw new InvalidOperationException("Variant sequence is unavailable");
-        sequence.Width = variant.Width;
-        sequence.Height = variant.Height;
-        if (variant.FrameRate.HasValue) sequence.FrameRate = variant.FrameRate.Value;
-
-        foreach (var trackOverride in variant.TrackOverrides)
-        {
-            var track = sequence.Tracks.FirstOrDefault(candidate => candidate.Id == trackOverride.TrackId);
-            if (track == null) continue;
-            if (trackOverride.Hidden.HasValue) track.Hidden = trackOverride.Hidden.Value;
-            if (trackOverride.Muted.HasValue) track.Muted = trackOverride.Muted.Value;
-            if (trackOverride.Solo.HasValue) track.Solo = trackOverride.Solo.Value;
-        }
-        foreach (var itemOverride in variant.ItemOverrides)
-        {
-            var track = sequence.Tracks.FirstOrDefault(candidate => candidate.Items.Any(item => item.Id == itemOverride.ItemId));
-            var item = track?.Items.FirstOrDefault(candidate => candidate.Id == itemOverride.ItemId);
-            if (track == null || item == null) continue;
-            if (itemOverride.Hidden)
-            {
-                track.Items.Remove(item);
-                continue;
-            }
-            if (itemOverride.PositionX.HasValue) item.Transform.PositionX = itemOverride.PositionX.Value;
-            if (itemOverride.PositionY.HasValue) item.Transform.PositionY = itemOverride.PositionY.Value;
-            if (itemOverride.ScaleX.HasValue) item.Transform.ScaleX = Math.Max(0.001, itemOverride.ScaleX.Value);
-            if (itemOverride.ScaleY.HasValue) item.Transform.ScaleY = Math.Max(0.001, itemOverride.ScaleY.Value);
-            if (itemOverride.RotationDegrees.HasValue) item.Transform.RotationDegrees = itemOverride.RotationDegrees.Value;
-            if (itemOverride.Opacity.HasValue) item.Opacity = Math.Clamp(itemOverride.Opacity.Value, 0, 1);
-            if (itemOverride.Volume.HasValue) item.Volume = Math.Clamp(itemOverride.Volume.Value, 0, 4);
-            if (itemOverride.Pan.HasValue) item.Pan = Math.Clamp(itemOverride.Pan.Value, -1, 1);
-            if (itemOverride.FontSize.HasValue && item.Kind == ItemKind.Text) item.FontSize = Math.Clamp(itemOverride.FontSize.Value, 1, 1000);
-            if (itemOverride.TextContent != null && item.Kind == ItemKind.Text) item.TextContent = itemOverride.TextContent;
-        }
-        if (variant.Overrides.TryGetValue("captionScale", out var captionScaleText)
-            && double.TryParse(captionScaleText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var captionScale))
-        {
-            foreach (var textItem in sequence.Tracks.SelectMany(track => track.Items).Where(item => item.Kind == ItemKind.Text))
-                textItem.FontSize = Math.Clamp(textItem.FontSize * captionScale, 1, 1000);
-        }
-        if (variant.Overrides.TryGetValue("captionYOffset", out var captionOffsetText)
-            && double.TryParse(captionOffsetText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var captionOffset))
-        {
-            foreach (var textItem in sequence.Tracks.SelectMany(track => track.Items).Where(item => item.Kind == ItemKind.Text))
-                textItem.Transform.PositionY += captionOffset;
-        }
-        if (variant.Overrides.TryGetValue("backgroundColor", out var backgroundColor)
-            && !string.IsNullOrWhiteSpace(backgroundColor))
-        {
-            sequence.Background = new CanvasBackground
-            {
-                Kind = CanvasBackgroundKind.Solid,
-                PrimaryColor = backgroundColor,
-                SecondaryColor = backgroundColor,
-            };
-        }
-        return (clone, sequence);
-    }
+    private (Project Project, Sequence Sequence) CreateVariantRenderContext(ExportVariant variant) =>
+        VariantRenderContextService.Create(_project, variant);
 
     private async Task RenderSelectedVariantAsync()
     {
@@ -414,6 +443,7 @@ public partial class MainWindow
             StatusText.Text = "Variant sequence is unavailable";
             return;
         }
+        var projectContext = CaptureProjectOperationContext();
         var (renderProject, renderSequence) = CreateVariantRenderContext(variant);
         var format = Enum.TryParse<TimelineExportFormat>(variant.Format, true, out var parsedFormat) ? parsedFormat : TimelineExportFormat.Mp4;
         var extension = format switch
@@ -439,7 +469,12 @@ public partial class MainWindow
         if (dialog.ShowDialog(this) != true) return;
         var quality = Enum.TryParse<TimelineExportQuality>(variant.Quality, true, out var parsedQuality) ? parsedQuality : TimelineExportQuality.High;
         var options = new TimelineExportOptions(format, quality);
-        variant.Status = ExportVariantStatus.Rendering;
+        var operationCancellation = new CancellationTokenSource();
+        _operationCancellation?.Dispose();
+        _operationCancellation = operationCancellation;
+        CancelOperationButton.Visibility = Visibility.Visible;
+        OperationProgressBar.Visibility = Visibility.Visible;
+        OperationProgressBar.IsIndeterminate = true;
         RefreshVariantsAndReceipts();
         SetMediaOperationState(true, $"Rendering {variant.Name}…");
         try
@@ -448,30 +483,65 @@ public partial class MainWindow
                 renderProject,
                 renderSequence,
                 dialog.FileName,
-                cancellationToken: CancellationToken.None,
+                cancellationToken: operationCancellation.Token,
                 outputWidth: variant.Width,
                 outputHeight: variant.Height,
                 exportOptions: options);
             var receipt = await _renderReceiptService.CreateAsync(
-                _project,
+                renderProject,
                 renderSequence,
                 dialog.FileName,
                 variant.Width,
                 variant.Height,
                 options,
                 "manual-variant-panel",
-                variant.Id);
-            using (var mutation = _saveCoordinator.BeginMutation()) _project.IncrementRevision();
+                variant.Id,
+                operationCancellation.Token);
+            if (!IsCurrentProjectOperation(projectContext))
+            {
+                StatusText.Text = "Variant render finished, but the originating project is no longer open; no project state was changed.";
+                return;
+            }
+            using (var mutation = _saveCoordinator.BeginMutation())
+            {
+                RenderReceiptService.ApplyToProject(_project, receipt);
+                _project.IncrementRevision();
+            }
             MarkProjectDirty("Variant render and QA receipt added");
             StatusText.Text = $"Variant verification: {receipt.Status}";
         }
+        catch (OperationCanceledException)
+        {
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                using (var mutation = _saveCoordinator.BeginMutation())
+                {
+                    variant.Status = ExportVariantStatus.Failed;
+                    _project.IncrementRevision();
+                }
+                MarkProjectDirty("Variant render canceled");
+            }
+            StatusText.Text = "Variant render canceled";
+        }
         catch (Exception ex)
         {
-            variant.Status = ExportVariantStatus.Failed;
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                using (var mutation = _saveCoordinator.BeginMutation())
+                {
+                    variant.Status = ExportVariantStatus.Failed;
+                    _project.IncrementRevision();
+                }
+                MarkProjectDirty("Variant render failed");
+            }
             StatusText.Text = $"Variant render failed: {ex.Message}";
         }
         finally
         {
+            CancelOperationButton.Visibility = Visibility.Collapsed;
+            OperationProgressBar.Visibility = Visibility.Collapsed;
+            if (ReferenceEquals(_operationCancellation, operationCancellation)) _operationCancellation = null;
+            operationCancellation.Dispose();
             SetMediaOperationState(false, "Variant render finished");
             RefreshVariantsAndReceipts();
         }
@@ -535,20 +605,48 @@ public partial class MainWindow
     {
         if (GeneratedCompositionList.SelectedItem is not GeneratedCompositionListItem selected) return;
         var spec = selected.Spec;
+        var projectContext = CaptureProjectOperationContext();
+        var operationCancellation = new CancellationTokenSource();
+        _operationCancellation?.Dispose();
+        _operationCancellation = operationCancellation;
+        CancelOperationButton.Visibility = Visibility.Visible;
+        OperationProgressBar.Visibility = Visibility.Visible;
+        OperationProgressBar.IsIndeterminate = true;
         SetMediaOperationState(true, $"Rendering {spec.Name}…");
         try
         {
-            var result = await _externalCompositionService.RenderAsync(spec, _currentProjectPath);
+            var result = await _externalCompositionService.RenderAsync(spec, _currentProjectPath, operationCancellation.Token);
             if (!result.Success || result.OutputPath == null)
             {
-                StatusText.Text = $"Composition failed: {string.Join(" ", result.Errors)}";
+                using (var mutation = _saveCoordinator.BeginMutation())
+                {
+                    spec.Status = ExternalCompositionStatus.Failed;
+                    spec.LastError = string.Join(" ", result.Errors);
+                    _project.IncrementRevision();
+                }
+                MarkProjectDirty("Generated composition failed");
+                StatusText.Text = $"Composition failed: {spec.LastError}";
                 return;
             }
             var generatedAsset = spec.ImportAfterRender
-                ? await CreateGeneratedCompositionAssetAsync(spec, result.OutputPath)
+                ? await CreateGeneratedCompositionAssetAsync(spec, result.OutputPath, operationCancellation.Token)
                 : null;
+            if (!IsCurrentProjectOperation(projectContext))
+            {
+                StatusText.Text = "Composition render finished, but the originating project is no longer open; no project state was changed.";
+                return;
+            }
             using (var mutation = _saveCoordinator.BeginMutation())
             {
+                spec.OutputPath = result.OutputPath;
+                spec.LastOutputSha256 = result.OutputSha256;
+                spec.LastRenderedUtc = DateTimeOffset.UtcNow;
+                spec.Status = result.Verification?.Status == MediaExportVerificationStatus.Failed
+                    ? ExternalCompositionStatus.Failed
+                    : ExternalCompositionStatus.Rendered;
+                spec.LastError = spec.Status == ExternalCompositionStatus.Failed
+                    ? string.Join(" ", result.Verification?.Errors ?? result.Errors)
+                    : null;
                 if (generatedAsset != null) _project.MediaLibrary.Add(generatedAsset);
                 _project.IncrementRevision();
             }
@@ -556,25 +654,54 @@ public partial class MainWindow
             MarkProjectDirty("Generated composition rendered");
             StatusText.Text = $"Composition verification: {result.Verification?.Status}";
         }
+        catch (OperationCanceledException)
+        {
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                using (var mutation = _saveCoordinator.BeginMutation())
+                {
+                    spec.Status = ExternalCompositionStatus.Failed;
+                    spec.LastError = "Composition render was canceled.";
+                    _project.IncrementRevision();
+                }
+                MarkProjectDirty("Generated composition canceled");
+            }
+            StatusText.Text = "Composition render canceled";
+        }
         catch (Exception ex)
         {
-            spec.Status = ExternalCompositionStatus.Failed;
-            spec.LastError = ex.Message;
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                using (var mutation = _saveCoordinator.BeginMutation())
+                {
+                    spec.Status = ExternalCompositionStatus.Failed;
+                    spec.LastError = ex.Message;
+                    _project.IncrementRevision();
+                }
+                MarkProjectDirty("Generated composition failed");
+            }
             StatusText.Text = $"Composition render failed: {ex.Message}";
         }
         finally
         {
+            CancelOperationButton.Visibility = Visibility.Collapsed;
+            OperationProgressBar.Visibility = Visibility.Collapsed;
+            if (ReferenceEquals(_operationCancellation, operationCancellation)) _operationCancellation = null;
+            operationCancellation.Dispose();
             SetMediaOperationState(false, "Composition render finished");
             RefreshGeneratedCompositions();
         }
     }
 
-    private async Task<MediaAsset?> CreateGeneratedCompositionAssetAsync(ExternalCompositionSpec spec, string outputPath)
+    private async Task<MediaAsset?> CreateGeneratedCompositionAssetAsync(
+        ExternalCompositionSpec spec,
+        string outputPath,
+        CancellationToken cancellationToken)
     {
         var fullPath = Path.GetFullPath(outputPath);
         if (_project.MediaLibrary.Any(asset => string.Equals(Path.GetFullPath(asset.OriginalPath), fullPath, StringComparison.OrdinalIgnoreCase)))
             return null;
-        var probe = await _mediaService.ProbeAsync(fullPath);
+        var probe = await _mediaService.ProbeAsync(fullPath, cancellationToken);
         var video = probe.Streams.FirstOrDefault(stream => stream.Kind == MediaStreamKind.Video);
         return new MediaAsset
         {
@@ -612,6 +739,11 @@ public partial class MainWindow
             var warning = Stage.Warnings.Count > 0 ? $" • {Stage.Warnings.Count} warning(s)" : string.Empty;
             return $"{Number}. {Stage.Name} — {Stage.Status}{gate}{warning}";
         }
+    }
+
+    private sealed record CampaignTaskListItem(CampaignTask Task)
+    {
+        public override string ToString() => $"{(Task.IsCompleted ? "✓" : "○")} {Task.Title}";
     }
 
     private sealed record TranscriptAssetListItem(string Name, MediaIntelligenceAnalysis Analysis)

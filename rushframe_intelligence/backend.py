@@ -5,35 +5,63 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from threading import BoundedSemaphore
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-from rushframe_intelligence.agent_context import build_agent_context
 from rushframe_intelligence.capabilities import discover_capabilities
-from rushframe_intelligence.context_index import MediaContextIndex
-from rushframe_intelligence.serialization import load_analysis
+from rushframe_intelligence.sound_library import SoundLibraryCatalog, default_catalog_path
 
 PROTOCOL_VERSION = "2025-06-18"
 MAX_REQUEST_BYTES = 1024 * 1024
 DEFAULT_EDITOR_BRIDGE = "http://127.0.0.1:7320"
 EDITOR_SESSION_TOKEN = os.environ.get("RUSHFRAME_EDITOR_SESSION_TOKEN", "").strip()
 MAX_BACKEND_THREADS = max(2, min(16, int(os.environ.get("RUSHFRAME_BACKEND_MAX_THREADS", "6"))))
+REQUEST_IO_TIMEOUT_SECONDS = max(5, min(120, int(os.environ.get("RUSHFRAME_REQUEST_IO_TIMEOUT_SECONDS", "30"))))
 BRIDGE_OPERATION_TIMEOUT_SECONDS = max(
     30,
     min(7200, int(os.environ.get("RUSHFRAME_BRIDGE_TIMEOUT_SECONDS", "1800"))),
 )
 
+
+def _edit_plan_input_schema(*, include_review_options: bool = False) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+        "base_revision": {"type": "integer", "minimum": 0},
+        "plan_id": {"type": "string"},
+        "summary": {"type": "string"},
+        "prompt_id": {"type": "string"},
+        "prompt_version": {"type": "string"},
+        "creative_plan": {"type": "object"},
+        "operations": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 100},
+    }
+    if include_review_options:
+        properties.update({
+            "render_draft": {"type": "boolean", "default": True},
+            "review_width": {"type": "integer", "minimum": 320, "maximum": 1920, "default": 960},
+        })
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": ["base_revision", "operations"],
+        "additionalProperties": False,
+    }
+
+
 TOOLS = [
     {
         "name": "rushframe.capabilities",
-        "description": "Report installed Rushframe media-intelligence capabilities.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "description": "Report installed intelligence capabilities and live editor actions when Rushframe is open.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+            },
+            "additionalProperties": False,
+        },
     },
     {
         "name": "rushframe.search_moments",
@@ -41,29 +69,76 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "index": {"type": "string", "description": "Absolute path to context.sqlite."},
+                "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+                "media_asset_id": {"type": "string", "description": "Registered media asset ID from the open Rushframe project."},
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 12},
                 "roles": {"type": "array", "items": {"type": "string"}},
                 "min_score": {"type": "number", "minimum": 0, "maximum": 1, "default": 0},
                 "max_duration": {"type": "number", "exclusiveMinimum": 0},
             },
-            "required": ["index", "query"],
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "rushframe.search_sfx",
+        "description": "Search user-approved local Rushframe sound-library roots. Results are read-only; only results already registered in the open project can be used in timeline edits.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+                "query": {"type": "string", "default": ""},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                "max_duration": {"type": "number", "exclusiveMinimum": 0},
+                "min_lufs": {"type": "number"},
+                "max_lufs": {"type": "number"},
+                "min_tempo": {"type": "number", "minimum": 0},
+                "max_tempo": {"type": "number", "minimum": 0},
+                "category": {"type": "string"},
+                "mood": {"type": "string"},
+                "license": {"type": "string"},
+                "favorites_only": {"type": "boolean", "default": False},
+                "include_offline": {"type": "boolean", "default": False},
+                "lexical_only": {"type": "boolean", "default": False},
+                "similar_to_sound_id": {"type": "string"},
+                "recently_used": {"type": "boolean", "default": False},
+            },
             "additionalProperties": False,
         },
     },
     {
         "name": "rushframe.get_agent_context",
-        "description": "Build a compact agent context bundle from media-analysis.json.",
+        "description": "Build a compact media-analysis context bundle for one registered analyzed asset in the open project.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "analysis": {"type": "string", "description": "Absolute path to media-analysis.json."},
+                "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+                "media_asset_id": {"type": "string", "description": "Registered media asset ID from the open Rushframe project."},
                 "query": {"type": "string", "default": ""},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                 "roles": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["analysis"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "rushframe.get_editing_context",
+        "description": "Read a bounded, path-safe editing snapshot with campaign intent, brief, tasks, playhead, selection, locks, media readiness, quality issues, and edit-skill categories. Use this before planning edits.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
+                "media_asset_id": {"type": "string", "description": "Optional registered analyzed asset to include as focused media context."},
+                "query": {"type": "string", "default": ""},
+                "roles": {"type": "array", "items": {"type": "string"}},
+                "item_limit": {"type": "integer", "minimum": 25, "maximum": 500, "default": 250},
+                "media_asset_limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200},
+                "moment_limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 12},
+                "min_score": {"type": "number", "minimum": 0, "maximum": 1, "default": 0},
+                "include_completed_tasks": {"type": "boolean", "default": False},
+                "include_media_context": {"type": "boolean", "default": True},
+            },
             "additionalProperties": False,
         },
     },
@@ -80,7 +155,7 @@ TOOLS = [
     },
     {
         "name": "rushframe.apply_timeline_edit",
-        "description": "Preview or apply an approved live timeline edit in the desktop editor.",
+        "description": "Preview or apply one approved live timeline edit. Read rushframe.get_editing_context and rushframe.capabilities first; prefer an edit plan for coordinated changes.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -88,14 +163,9 @@ TOOLS = [
                 "base_revision": {"type": "integer", "minimum": 0},
                 "action": {
                     "type": "string",
-                    "enum": [
-                        "add_clip", "add_music", "add_text", "add_caption",
-                        "move_clip", "trim_clip", "split_clip", "delete_clip",
-                        "add_transition", "add_effect",
-                    ],
+                    "description": "Editor action ID. Call rushframe.capabilities for the authoritative live action list.",
                 },
                 "preview_only": {"type": "boolean", "default": True},
-                "require_approval": {"type": "boolean", "default": True},
                 "track_id": {"type": "string"},
                 "item_id": {"type": "string"},
                 "media_asset_id": {"type": "string"},
@@ -120,6 +190,21 @@ TOOLS = [
         },
     },
     {
+        "name": "rushframe.preview_edit_plan",
+        "description": "Validate a coordinated edit plan against the current revision and return affected ranges, quality scores, warnings, and the approval preview without mutating the project.",
+        "inputSchema": _edit_plan_input_schema(),
+    },
+    {
+        "name": "rushframe.review_edit_plan",
+        "description": "Apply an edit plan only to an isolated project snapshot, optionally render a low-resolution rough cut, and return quality issues for a corrective second pass. The live project is not modified.",
+        "inputSchema": _edit_plan_input_schema(include_review_options=True),
+    },
+    {
+        "name": "rushframe.apply_edit_plan",
+        "description": "Show the plan for user approval, then apply all operations atomically as one undoable revision-safe edit. No operation is applied when validation or approval fails.",
+        "inputSchema": _edit_plan_input_schema(),
+    },
+    {
         "name": "rushframe.render_timeline",
         "description": "Render/export the live desktop timeline after user approval.",
         "inputSchema": {
@@ -128,7 +213,6 @@ TOOLS = [
                 "bridge_url": {"type": "string", "default": DEFAULT_EDITOR_BRIDGE},
                 "base_revision": {"type": "integer", "minimum": 0},
                 "output_path": {"type": "string"},
-                "require_approval": {"type": "boolean", "default": True},
             },
             "required": ["output_path"],
             "additionalProperties": False,
@@ -160,6 +244,10 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 class RushframeBackendHandler(BaseHTTPRequestHandler):
     server_version = "RushframeIntelligence/2.0"
 
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(REQUEST_IO_TIMEOUT_SECONDS)
+
     def _write_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status.value)
@@ -181,25 +269,39 @@ class RushframeBackendHandler(BaseHTTPRequestHandler):
             if parsed.path == "/health":
                 self._write_json({"status": "ok", "service": "rushframe-intelligence", "mcp": "/mcp", "sessionRequired": bool(EDITOR_SESSION_TOKEN)})
                 return
+            if EDITOR_SESSION_TOKEN and not _request_is_authorized(self.headers):
+                self._write_json({"error": "invalid agent session"}, HTTPStatus.UNAUTHORIZED)
+                return
             if parsed.path == "/capabilities":
                 self._write_json(discover_capabilities())
                 return
             if parsed.path == "/search":
-                results = _search({
-                    "index": _required(query, "index"),
+                results = _bridge_post({
+                    "media_asset_id": query.get("media_asset_id", [""])[0],
                     "query": _required(query, "q"),
                     "limit": int(query.get("limit", ["12"])[0]),
                     "roles": query.get("role", []),
-                })
+                }, "search-context")
                 self._write_json(results)
                 return
+            if parsed.path == "/sound-library/search":
+                self._write_json(_search_sfx({
+                    "query": query.get("q", [""])[0],
+                    "limit": int(query.get("limit", ["20"])[0]),
+                    "max_duration": _optional_float(query, "max_duration"),
+                    "category": query.get("category", [""])[0],
+                    "mood": query.get("mood", [""])[0],
+                    "favorites_only": query.get("favorites_only", ["false"])[0].lower() == "true",
+                    "lexical_only": query.get("lexical_only", ["false"])[0].lower() == "true",
+                }))
+                return
             if parsed.path == "/context":
-                bundle = _context({
-                    "analysis": _required(query, "analysis"),
+                bundle = _bridge_post({
+                    "media_asset_id": query.get("media_asset_id", [""])[0],
                     "query": query.get("q", [""])[0],
                     "limit": int(query.get("limit", ["20"])[0]),
                     "roles": query.get("role", []),
-                })
+                }, "agent-context")
                 self._write_json(bundle)
                 return
             if parsed.path == "/mcp":
@@ -287,11 +389,26 @@ def _call_tool(name: object, arguments: object) -> object:
     if not isinstance(arguments, dict):
         raise ValueError("Tool arguments must be an object")
     if name == "rushframe.capabilities":
-        return discover_capabilities()
+        intelligence = discover_capabilities()
+        try:
+            editor = _bridge_get(arguments, "capabilities")
+        except Exception as exc:
+            editor = {"ok": False, "unavailable": True, "error": str(exc)}
+        return {"intelligence": intelligence, "editor": editor}
     if name == "rushframe.search_moments":
-        return _search(arguments)
+        return _bridge_post(arguments, "search-context")
+    if name == "rushframe.search_sfx":
+        return _search_sfx(arguments)
     if name == "rushframe.get_agent_context":
-        return _context(arguments)
+        return _bridge_post(arguments, "agent-context")
+    if name == "rushframe.get_editing_context":
+        return _bridge_post(arguments, "editing-context")
+    if name == "rushframe.preview_edit_plan":
+        return _bridge_post(arguments, "plan")
+    if name == "rushframe.review_edit_plan":
+        return _bridge_post(arguments, "review-plan")
+    if name == "rushframe.apply_edit_plan":
+        return _bridge_post(arguments, "apply-plan")
     if name == "rushframe.get_timeline_state":
         return _bridge_get(arguments, "timeline")
     if name == "rushframe.apply_timeline_edit":
@@ -301,43 +418,17 @@ def _call_tool(name: object, arguments: object) -> object:
     raise ValueError(f"Unknown tool: {name}")
 
 
-def _search(arguments: dict[str, Any]) -> list[dict[str, Any]]:
-    index_path = str(arguments.get("index", "")).strip()
-    query = str(arguments.get("query", "")).strip()
-    if not index_path or not query:
-        raise ValueError("index and query are required")
-    limit = max(1, min(50, int(arguments.get("limit", 12))))
-    roles = [str(value) for value in arguments.get("roles", [])]
-    results = MediaContextIndex(index_path).search(
-        query,
-        limit=limit,
-        roles=roles,
-        min_overall_score=float(arguments.get("min_score", 0)),
-        max_duration=float(arguments["max_duration"]) if arguments.get("max_duration") is not None else None,
-    )
-    return [asdict(result) for result in results]
-
-
-def _context(arguments: dict[str, Any]) -> dict[str, Any]:
-    analysis_path = str(arguments.get("analysis", "")).strip()
-    if not analysis_path:
-        raise ValueError("analysis is required")
-    limit = max(1, min(50, int(arguments.get("limit", 20))))
-    roles = [str(value) for value in arguments.get("roles", [])]
-    return build_agent_context(
-        load_analysis(Path(analysis_path)),
-        query=str(arguments.get("query", "")),
-        roles=roles,
-        limit=limit,
-    )
-
-
 def _bridge_url(arguments: dict[str, Any], endpoint: str) -> str:
     base = str(arguments.get("bridge_url") or DEFAULT_EDITOR_BRIDGE).rstrip("/")
     parsed = urlparse(base)
-    if parsed.hostname not in {"127.0.0.1", "localhost"}:
-        raise ValueError("Editor bridge must be loopback-only.")
-    return f"{base}/{endpoint.lstrip('/')}"
+    expected = urlparse(DEFAULT_EDITOR_BRIDGE)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise ValueError("Editor bridge must be loopback-only HTTP.")
+    if parsed.port != expected.port:
+        raise ValueError(f"Editor bridge must use the configured Rushframe port {expected.port}.")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+        raise ValueError("Editor bridge URL must not contain credentials, a path, query, or fragment.")
+    return f"http://127.0.0.1:{expected.port}/{endpoint.lstrip('/')}"
 
 
 def _bridge_headers() -> dict[str, str]:
@@ -375,6 +466,94 @@ def _bridge_post(arguments: dict[str, Any], endpoint: str) -> object:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _search_sfx(arguments: dict[str, Any]) -> dict[str, Any]:
+    catalog = SoundLibraryCatalog(default_catalog_path())
+    response = catalog.search(
+        str(arguments.get("query") or ""),
+        max_results=max(1, min(50, int(arguments.get("limit") or 20))),
+        max_duration=_coerce_optional_float(arguments.get("max_duration")),
+        min_lufs=_coerce_optional_float(arguments.get("min_lufs")),
+        max_lufs=_coerce_optional_float(arguments.get("max_lufs")),
+        min_tempo=_coerce_optional_float(arguments.get("min_tempo")),
+        max_tempo=_coerce_optional_float(arguments.get("max_tempo")),
+        category=_optional_text(arguments.get("category")),
+        mood=_optional_text(arguments.get("mood")),
+        license_name=_optional_text(arguments.get("license")),
+        favorites_only=bool(arguments.get("favorites_only", False)),
+        online_only=not bool(arguments.get("include_offline", False)),
+        semantic=not bool(arguments.get("lexical_only", False)),
+        similar_to_sound_id=_optional_text(arguments.get("similar_to_sound_id")),
+        recently_used=bool(arguments.get("recently_used", False)),
+    )
+    registrations: dict[str, str] = {}
+    registration_warning: str | None = None
+    try:
+        state = _bridge_get(arguments, "sound-library-registrations")
+        if isinstance(state, dict):
+            for item in state.get("assets", []):
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path")
+                media_asset_id = item.get("mediaAssetId") or item.get("media_asset_id")
+                if isinstance(path, str) and isinstance(media_asset_id, str):
+                    registrations[os.path.normcase(os.path.abspath(path))] = media_asset_id
+    except Exception as exc:
+        registration_warning = f"Editor registration state unavailable: {exc}"
+
+    safe_results: list[dict[str, Any]] = []
+    for result in response.results:
+        registered_id = registrations.get(os.path.normcase(os.path.abspath(result.path)))
+        safe_results.append({
+            "sound_id": result.sound_id,
+            "name": result.name,
+            "duration": result.duration,
+            "codec": result.codec,
+            "channels": result.channels,
+            "sample_rate": result.sample_rate,
+            "lufs": result.lufs,
+            "peak_db": result.peak_db,
+            "category": result.category,
+            "mood": result.mood,
+            "tempo_bpm": result.tempo_bpm,
+            "license_name": result.license_name,
+            "attribution": result.attribution,
+            "requires_attribution": result.requires_attribution,
+            "favorite": result.favorite,
+            "offline": result.offline,
+            "tags": result.tags,
+            "score": result.score,
+            "embedding_provider": result.embedding_provider,
+            "registered_media_asset_id": registered_id,
+            "can_use": registered_id is not None and not result.offline,
+        })
+    warnings = [value for value in [response.warning, registration_warning] if value]
+    return {
+        "ok": True,
+        "mode": response.mode,
+        "embedding_provider": response.embedding_provider,
+        "semantic_available": response.semantic_available,
+        "results": safe_results,
+        "warnings": warnings,
+        "registration_required_for_unregistered_results": True,
+    }
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _optional_float(query: dict[str, list[str]], name: str) -> float | None:
+    value = query.get(name, [""])[0].strip()
+    return float(value) if value else None
+
+
 def _rpc_result(request_id: object, result: object) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
@@ -391,6 +570,8 @@ def _required(query: dict[str, list[str]], name: str) -> str:
 
 
 def serve(host: str = "127.0.0.1", port: int = 7319) -> None:
+    if host.strip().lower() not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("Rushframe intelligence backend must bind to a loopback host.")
     server = BoundedThreadingHTTPServer((host, port), RushframeBackendHandler)
     print(json.dumps({"status": "ready", "host": host, "port": port, "mcp": f"http://{host}:{port}/mcp"}), flush=True)
     try:

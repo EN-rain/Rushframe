@@ -8,7 +8,7 @@ public static class TrackCompatibility
         ItemKind.Text => trackKind is TrackKind.Text or TrackKind.Overlay,
         ItemKind.Image => trackKind is TrackKind.Video or TrackKind.Overlay,
         ItemKind.Sticker => trackKind is TrackKind.Overlay or TrackKind.Video,
-        ItemKind.AdjustmentLayer => trackKind is TrackKind.Video,
+        ItemKind.AdjustmentLayer => trackKind is TrackKind.Video or TrackKind.Overlay,
         _ => false,
     };
 }

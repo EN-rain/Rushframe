@@ -112,7 +112,7 @@ public sealed class ProjectSaveCoordinator : IAsyncDisposable
         }
     }
 
-    public async Task SaveExplicitAsync(
+    public async Task<long> SaveExplicitAsync(
         Project project,
         string path,
         CancellationToken cancellationToken = default)
@@ -126,6 +126,7 @@ public sealed class ProjectSaveCoordinator : IAsyncDisposable
                 await _projectRepository.SaveSerializedAsync(snapshot.Json, path, cancellationToken);
             Interlocked.Exchange(ref _lastExplicitlySavedRevision, snapshot.Revision);
             SaveCompleted?.Invoke(this, new ProjectSaveCompletedEventArgs(snapshot.Revision, path, false));
+            return snapshot.Revision;
         }
         catch (Exception ex)
         {

@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class SetTextContentCommand : IEditCommand
+public sealed class SetTextContentCommand : IAtomicEditCommand
 {
     public string Description => $"Set text content on {ItemId}";
 
@@ -40,7 +40,7 @@ public sealed class SetTextContentCommand : IEditCommand
     }
 }
 
-public sealed class SetTextPropertiesCommand : IEditCommand
+public sealed class SetTextPropertiesCommand : IAtomicEditCommand
 {
     public string Description => $"Set text properties on {ItemId}";
 

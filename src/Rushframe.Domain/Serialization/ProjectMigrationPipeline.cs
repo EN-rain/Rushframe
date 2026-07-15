@@ -16,6 +16,10 @@ public static class ProjectMigrationPipeline
         new Version0To1Migration(),
         new Version1To2Migration(),
         new Version2To3Migration(),
+        new Version3To4Migration(),
+        new Version4To5Migration(),
+        new Version5To6Migration(),
+        new Version6To7Migration(),
     ];
 
     public static string MigrateToCurrent(string json)
@@ -47,7 +51,7 @@ public static class ProjectMigrationPipeline
         public void Apply(JsonObject project)
         {
             project["revision"] ??= 0;
-            project["modifiedUtc"] ??= DateTimeOffset.UtcNow;
+            project["modifiedUtc"] ??= project["createdUtc"]?.DeepClone() ?? DateTimeOffset.UnixEpoch;
             project["assetProviders"] ??= new JsonArray();
             project["extensions"] ??= new JsonArray();
         }
@@ -117,6 +121,98 @@ public static class ProjectMigrationPipeline
             ["artifactPaths"] = new JsonArray(),
             ["revision"] = 0,
         };
+    }
+
+    private sealed class Version3To4Migration : IProjectMigration
+    {
+        public int FromVersion => 3;
+        public int ToVersion => 4;
+
+        public void Apply(JsonObject project)
+        {
+            project["editingBrief"] ??= new JsonObject
+            {
+                ["purpose"] = string.Empty,
+                ["targetAudience"] = string.Empty,
+                ["platform"] = string.Empty,
+                ["aspectRatio"] = string.Empty,
+                ["tone"] = string.Empty,
+                ["editingStyle"] = "custom",
+                ["pacing"] = string.Empty,
+                ["requiredMessages"] = new JsonArray(),
+                ["requiredMediaAssetIds"] = new JsonArray(),
+                ["forbiddenMediaAssetIds"] = new JsonArray(),
+                ["captionPolicy"] = string.Empty,
+                ["musicPolicy"] = string.Empty,
+                ["soundEffectsPolicy"] = string.Empty,
+                ["transitionPolicy"] = string.Empty,
+                ["callToAction"] = string.Empty,
+                ["brandColors"] = new JsonArray(),
+                ["brandFonts"] = new JsonArray(),
+                ["logoPolicy"] = string.Empty,
+                ["referenceNotes"] = string.Empty,
+            };
+        }
+    }
+
+    private sealed class Version4To5Migration : IProjectMigration
+    {
+        public int FromVersion => 4;
+        public int ToVersion => 5;
+
+        public void Apply(JsonObject project)
+        {
+            project["mediaRelationships"] ??= new JsonArray();
+        }
+    }
+
+    private sealed class Version5To6Migration : IProjectMigration
+    {
+        public int FromVersion => 5;
+        public int ToVersion => 6;
+
+        public void Apply(JsonObject project)
+        {
+            if (project["sequences"] is not JsonArray sequences) return;
+            foreach (var sequenceNode in sequences)
+            {
+                if (sequenceNode is not JsonObject sequence
+                    || sequence["transitions"] is not JsonArray transitions)
+                    continue;
+                foreach (var transitionNode in transitions)
+                {
+                    if (transitionNode is JsonObject transition)
+                        transition["audioMode"] ??= "none";
+                }
+            }
+        }
+    }
+
+    private sealed class Version6To7Migration : IProjectMigration
+    {
+        public int FromVersion => 6;
+        public int ToVersion => 7;
+
+        public void Apply(JsonObject project)
+        {
+            if (project["sequences"] is not JsonArray sequences) return;
+            foreach (var sequenceNode in sequences)
+            {
+                if (sequenceNode is not JsonObject sequence || sequence["tracks"] is not JsonArray tracks) continue;
+                foreach (var trackNode in tracks)
+                {
+                    if (trackNode is not JsonObject track || track["items"] is not JsonArray items) continue;
+                    foreach (var itemNode in items)
+                    {
+                        if (itemNode is not JsonObject item) continue;
+                        item["visualTransitionIn"] ??= "none";
+                        item["visualTransitionInDuration"] ??= new JsonObject { ["numerator"] = 0, ["denominator"] = 1 };
+                        item["visualTransitionOut"] ??= "none";
+                        item["visualTransitionOutDuration"] ??= new JsonObject { ["numerator"] = 0, ["denominator"] = 1 };
+                    }
+                }
+            }
+        }
     }
 
     private sealed class Version1To2Migration : IProjectMigration

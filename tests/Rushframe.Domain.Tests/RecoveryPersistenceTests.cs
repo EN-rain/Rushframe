@@ -37,6 +37,26 @@ public sealed class RecoveryPersistenceTests
     }
 
     [Fact]
+    public void AutosaveRetention_does_not_evict_other_projects_because_of_a_global_file_count()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"rushframe-autosave-retention-{Guid.NewGuid():N}");
+        try
+        {
+            var service = new AutosaveService(root);
+            for (var index = 0; index < 15; index++)
+                service.Save(new Project { Name = $"Project {index}" });
+
+            var files = Directory.GetFiles(root, "*.autosave");
+
+            Assert.Equal(15, files.Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void AutosaveService_LoadMostRecent_ReturnsNewestAutosave()
     {
         var root = Path.Combine(Path.GetTempPath(), $"rushframe-autosave-{Guid.NewGuid():N}");

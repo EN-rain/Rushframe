@@ -4,7 +4,7 @@ namespace Rushframe.Domain.Editing;
 /// Adds a pre-created track with a stable identifier so a composite command can
 /// target that track with subsequent clip operations in the same atomic edit.
 /// </summary>
-public sealed class AddPreparedTrackCommand : IEditCommand
+public sealed class AddPreparedTrackCommand : IAtomicEditCommand
 {
     public required Track Track { get; init; }
     public int? InsertAt { get; init; }
@@ -20,6 +20,7 @@ public sealed class AddPreparedTrackCommand : IEditCommand
             sequence.Tracks.Insert(Math.Clamp(InsertAt.Value, 0, sequence.Tracks.Count), Track);
         else
             sequence.Tracks.Add(Track);
+        TrackOrdering.Normalize(sequence);
         _added = true;
         return EditResult.Ok();
     }
@@ -30,6 +31,7 @@ public sealed class AddPreparedTrackCommand : IEditCommand
         var index = sequence.Tracks.FindIndex(candidate => candidate.Id == Track.Id);
         if (index < 0) return EditResult.Fail($"Track {Track.Id} was not found");
         sequence.Tracks.RemoveAt(index);
+        TrackOrdering.Normalize(sequence);
         _added = false;
         return EditResult.Ok();
     }

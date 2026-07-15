@@ -3,7 +3,7 @@ using Rushframe.Domain.Editing;
 
 namespace Rushframe.Application;
 
-public sealed class PasteClipCommand : IEditCommand
+public sealed class PasteClipCommand : IAtomicEditCommand
 {
     public string Description => "Paste clip";
 
@@ -11,23 +11,25 @@ public sealed class PasteClipCommand : IEditCommand
     public required MediaTime TimelineStart { get; init; }
     public required CopyClipCommand CopyCommand { get; init; }
 
-    private TimelineItemId _pastedItemId;
+    private TimelineItem? _pastedItem;
 
     public EditResult Execute(Sequence sequence)
     {
         if (CopyCommand.Clipboard == null)
             return EditResult.Fail("Nothing to paste");
+        if (TimelineStart.Seconds < 0)
+            return EditResult.Fail("Timeline start cannot be negative");
 
         var track = sequence.Tracks.FirstOrDefault(t => t.Id == TrackId);
         if (track == null)
             return EditResult.Fail(new TrackNotFoundError(TrackId));
         if (track.Locked)
             return EditResult.Fail("Track is locked");
+        if (!TrackCompatibility.IsItemCompatibleWithTrack(CopyCommand.Clipboard.Kind, track.Kind))
+            return EditResult.Fail($"{CopyCommand.Clipboard.Kind} items are not compatible with {track.Kind} tracks");
 
-        var paste = TimelineItemCloner.Clone(CopyCommand.Clipboard, TimelineStart);
-
-        _pastedItemId = paste.Id;
-        track.Items.Add(paste);
+        _pastedItem ??= TimelineItemCloner.Clone(CopyCommand.Clipboard, TimelineStart);
+        track.Items.Add(_pastedItem);
         return EditResult.Ok();
     }
 
@@ -35,8 +37,7 @@ public sealed class PasteClipCommand : IEditCommand
     {
         foreach (var track in sequence.Tracks)
         {
-            var removed = track.Items.RemoveAll(i => i.Id == _pastedItemId);
-            if (removed > 0) return EditResult.Ok();
+            if (_pastedItem != null && track.Items.Remove(_pastedItem)) return EditResult.Ok();
         }
         return EditResult.Fail("Pasted item not found");
     }

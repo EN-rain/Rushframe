@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class ApplyTransitionCommand : IEditCommand
+public sealed class ApplyTransitionCommand : IAtomicEditCommand
 {
     public string Description => "Apply transition";
 
@@ -9,6 +9,7 @@ public sealed class ApplyTransitionCommand : IEditCommand
     public TransitionKind Kind { get; init; } = TransitionKind.CrossDissolve;
     public MediaTime Duration { get; init; } = MediaTime.FromSeconds(1);
     public double Alignment { get; init; } = 0.5;
+    public TransitionAudioMode AudioMode { get; init; } = TransitionAudioMode.None;
 
     private Transition? _applied;
     private Transition? _previous;
@@ -26,19 +27,25 @@ public sealed class ApplyTransitionCommand : IEditCommand
             if (left == null || right == null) continue;
             if (track.Locked) return EditResult.Fail("Track is locked");
             if (left.Locked || right.Locked) return EditResult.Fail("Item is locked");
+            if (track.Kind is not (TrackKind.Video or TrackKind.Overlay))
+                return EditResult.Fail("Visual transitions can only be applied on video or overlay tracks");
+            if (left.Kind is not (ItemKind.Clip or ItemKind.Image)
+                || right.Kind is not (ItemKind.Clip or ItemKind.Image))
+                return EditResult.Fail("Transitions require a video or image item pair");
 
             var overlap = left.TimelineEnd.Seconds - right.TimelineStart.Seconds;
             if (overlap > 0) return EditResult.Fail("Clips already overlap; cannot apply transition");
 
             _previous = sequence.Transitions.FirstOrDefault(t => t.LeftItemId == LeftItemId && t.RightItemId == RightItemId);
             _index = _previous == null ? sequence.Transitions.Count : sequence.Transitions.IndexOf(_previous);
-            _applied = new Transition
+            _applied ??= new Transition
             {
                 LeftItemId = LeftItemId,
                 RightItemId = RightItemId,
                 Kind = Kind,
                 Duration = MediaTime.FromSeconds(Math.Min(Duration.Seconds, Math.Min(left.Duration.Seconds, right.Duration.Seconds) / 2)),
                 Alignment = Math.Clamp(Alignment, 0, 1),
+                AudioMode = AudioMode,
             };
             if (_previous == null)
                 sequence.Transitions.Add(_applied);
@@ -57,7 +64,6 @@ public sealed class ApplyTransitionCommand : IEditCommand
             sequence.Transitions.Remove(_applied);
         if (_previous != null && _index >= 0)
             sequence.Transitions.Insert(Math.Min(_index, sequence.Transitions.Count), _previous);
-        _applied = null;
         return EditResult.Ok();
     }
 }

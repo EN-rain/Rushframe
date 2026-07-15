@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class TrimClipCommand : IEditCommand
+public sealed class TrimClipCommand : IAtomicEditCommand
 {
     public string Description => $"Trim clip {ItemId}";
 
@@ -18,6 +18,7 @@ public sealed class TrimClipCommand : IEditCommand
 
     public EditResult Execute(Sequence sequence)
     {
+        _rippledItems.Clear();
         var track = sequence.Tracks.FirstOrDefault(t => t.Id == TrackId);
         if (track == null) return EditResult.Fail("Track not found");
         if (track.Locked) return EditResult.Fail("Track is locked");
@@ -37,26 +38,33 @@ public sealed class TrimClipCommand : IEditCommand
         _oldDuration = item.Duration;
         _oldSourceStart = item.SourceStart;
 
+        var rippleCandidates = new List<TimelineItem>();
+        var rippleDelta = MediaTime.Zero;
+        if (NewDuration.HasValue && Ripple.Enabled)
+        {
+            var gapEnd = _oldStart.Add(_oldDuration);
+            rippleDelta = _oldDuration.Subtract(NewDuration.Value);
+            rippleCandidates = track.Items
+                .Where(candidate => candidate.Id != item.Id && candidate.TimelineStart >= gapEnd)
+                .OrderBy(candidate => candidate.TimelineStart.Seconds)
+                .ToList();
+            if (rippleCandidates.Any(candidate => candidate.Locked))
+                return EditResult.Fail("A downstream item is locked");
+        }
+
         if (NewStart.HasValue)
             item.TimelineStart = NewStart.Value;
         if (NewSourceStart.HasValue)
             item.SourceStart = NewSourceStart.Value;
 
-        if (NewDuration.HasValue)
+        foreach (var rippled in rippleCandidates)
         {
-            if (Ripple.Enabled)
-            {
-                var gapEnd = _oldStart.Add(_oldDuration);
-                var delta = _oldDuration.Subtract(NewDuration.Value);
-                foreach (var rippled in track.Items.Where(i => i.TimelineStart >= gapEnd).OrderBy(i => i.TimelineStart.Seconds))
-                {
-                    _rippledItems.Add((rippled, rippled.TimelineStart));
-                    rippled.TimelineStart = rippled.TimelineStart.Subtract(delta);
-                }
-            }
-
-            item.Duration = NewDuration.Value;
+            _rippledItems.Add((rippled, rippled.TimelineStart));
+            rippled.TimelineStart = rippled.TimelineStart.Subtract(rippleDelta);
         }
+
+        if (NewDuration.HasValue)
+            item.Duration = NewDuration.Value;
 
         return EditResult.Ok();
     }
@@ -65,13 +73,12 @@ public sealed class TrimClipCommand : IEditCommand
     {
         var track = sequence.Tracks.FirstOrDefault(t => t.Id == TrackId);
         if (track == null) return EditResult.Fail("Track not found");
+        var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
+        if (item == null) return EditResult.Fail("Item not found");
 
         foreach (var (rippled, oldStart) in _rippledItems)
             rippled.TimelineStart = oldStart;
         _rippledItems.Clear();
-
-        var item = track.Items.FirstOrDefault(i => i.Id == ItemId);
-        if (item == null) return EditResult.Fail("Item not found");
 
         item.TimelineStart = _oldStart;
         item.Duration = _oldDuration;

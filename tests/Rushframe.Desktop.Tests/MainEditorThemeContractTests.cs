@@ -147,11 +147,12 @@ public sealed class MainEditorThemeContractTests
         Assert.Contains("_project.Name", projectCode, StringComparison.Ordinal);
 
         Assert.Contains("MediaCloseWindowButton", xaml, StringComparison.Ordinal);
-        Assert.Contains("InspectorCloseWindowButton", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("InspectorCloseWindowButton", xaml, StringComparison.Ordinal);
         Assert.Contains("UtilityCloseWindowButton", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("PreviewCloseWindowButton", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("TimelineCloseWindowButton", xaml, StringComparison.Ordinal);
-        Assert.Contains("InspectorAddTabButton", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("InspectorAddTabButton", xaml, StringComparison.Ordinal);
+        Assert.Contains("Text=\"MCP\"", xaml, StringComparison.Ordinal);
         Assert.Contains("ConfigureClosableInspectorTabs", shellCode, StringComparison.Ordinal);
         Assert.Contains("CloseInspectorTab", shellCode, StringComparison.Ordinal);
         Assert.Contains("ShowInspectorTabMenu", shellCode, StringComparison.Ordinal);

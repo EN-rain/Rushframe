@@ -9,6 +9,11 @@ public sealed class MediaAsset
     public string OriginalPath { get; init; } = "";
     public string RelativeProjectPath { get; init; } = "";
     public string FileFingerprint { get; init; } = "";
+    public string CatalogSoundId { get; init; } = "";
+    public string LicenseName { get; set; } = "";
+    public string Attribution { get; set; } = "";
+    public bool RequiresAttribution { get; set; }
+    public bool IsGeneratedDerivative { get; init; }
     public MediaTime Duration { get; init; }
     public int PixelWidth { get; init; }
     public int PixelHeight { get; init; }

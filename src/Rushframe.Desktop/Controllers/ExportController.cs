@@ -5,6 +5,7 @@ using Microsoft.Win32;
 using Rushframe.Desktop.Dialogs;
 using Rushframe.Desktop.Services;
 using Rushframe.Domain;
+using Rushframe.Domain.Serialization;
 using Rushframe.Media.Abstractions;
 using Rushframe.Media.Native;
 
@@ -31,8 +32,21 @@ internal sealed class ExportController
         IProgress<MediaJobProgress> progress,
         Action<string> addActivity,
         Action<string> setStatus,
-        Action<string> markProjectDirty)
+        Action<RenderReceiptDocument> commitReceipt)
     {
+        var soundLicenseIssues = SoundLicenseGuard.FindIssues(project, sequence);
+        if (soundLicenseIssues.Count > 0)
+        {
+            MessageBox.Show(
+                _owner,
+                SoundLicenseGuard.FormatBlockingMessage(soundLicenseIssues),
+                "Missing Sound Attribution",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            setStatus("Export blocked: required sound attribution is missing");
+            return;
+        }
+
         if (sequence.Duration.Seconds > HardOutputLimitSeconds + 0.001)
         {
             MessageBox.Show(
@@ -64,12 +78,21 @@ internal sealed class ExportController
         };
         if (dialog.ShowDialog(_owner) != true) return;
 
-        addActivity($"Export started: {Path.GetFileName(dialog.FileName)} ({settings.Width}×{settings.Height}, {settings.Options.Quality})");
+        var renderProject = ProjectSerializer.CreateSnapshot(project);
+        var renderSequence = renderProject.Sequences.FirstOrDefault(candidate => candidate.Id == sequence.Id)
+                             ?? throw new InvalidOperationException("The selected sequence was not present in the render snapshot.");
+        VariantRenderContextService.CenterPrimaryVideoForPortrait(
+            renderSequence,
+            sequence.Width,
+            sequence.Height,
+            settings.Width,
+            settings.Height);
+        addActivity($"Export started: {Path.GetFileName(dialog.FileName)} ({settings.Width}×{settings.Height}, {settings.Options.Quality}, revision {renderProject.Revision})");
         try
         {
             await _mediaService.ExportTimelineAsync(
-                project,
-                sequence,
+                renderProject,
+                renderSequence,
                 dialog.FileName,
                 progress,
                 cancellationToken,
@@ -79,13 +102,13 @@ internal sealed class ExportController
 
             addActivity($"Render complete; verifying output: {Path.GetFileName(dialog.FileName)}");
             setStatus("Verifying export and writing render receipt…");
-            var variant = project.ExportVariants.FirstOrDefault(candidate =>
-                candidate.SequenceId == sequence.Id
+            var variant = renderProject.ExportVariants.FirstOrDefault(candidate =>
+                candidate.SequenceId == renderSequence.Id
                 && candidate.Width == settings.Width
                 && candidate.Height == settings.Height);
             var receipt = await _receiptService.CreateAsync(
-                project,
-                sequence,
+                renderProject,
+                renderSequence,
                 dialog.FileName,
                 settings.Width,
                 settings.Height,
@@ -93,8 +116,7 @@ internal sealed class ExportController
                 approvalSource: "manual-export-dialog",
                 variantId: variant?.Id,
                 cancellationToken);
-            project.IncrementRevision();
-            markProjectDirty("Render receipt and QA results added");
+            commitReceipt(receipt);
             addActivity($"Export verification {receipt.Status}: {Path.GetFileName(receipt.ReceiptPath)}");
             var resultText = receipt.Status == RenderVerificationStatus.Failed
                 ? $"Export rendered, but verification failed.\n\nVideo:\n{dialog.FileName}\n\nReceipt:\n{receipt.ReceiptPath}\n\nReview the receipt before publishing."

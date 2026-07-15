@@ -14,6 +14,7 @@ using Rushframe.Desktop.Services;
 using Rushframe.Desktop.Timeline;
 using Rushframe.Domain;
 using Rushframe.Domain.Editing;
+using Rushframe.Domain.Serialization;
 using Rushframe.Desktop.Controllers;
 using Rushframe.Desktop.Dialogs;
 using Rushframe.Desktop.Panels;
@@ -43,12 +44,16 @@ public partial class MainWindow : Window
     private readonly SettingsService _settingsService;
     private readonly RecentProjectsService _recentProjectsService;
     private readonly IntelligenceBackendService _intelligenceBackend;
+    private readonly SoundLibraryCatalogService _soundLibraryCatalogService;
+    private readonly SoundLibraryWatchService _soundLibraryWatchService;
     private readonly LocalAgentBridgeService _localAgentBridge;
     private readonly string _appData;
     private WorkspaceLayout _layout;
     private EditorSettings _settings;
+    private readonly VisualProviderCredentialRotationService _visualProviderCredentialRotation;
 
     private Project _project = new();
+    private long _projectGeneration;
     private readonly UndoRedoStack _undoRedo = new();
     private readonly AutosaveService _autosave;
     private readonly ProjectRepository _projectRepo = new();
@@ -60,6 +65,7 @@ public partial class MainWindow : Window
     private readonly StabilizationAnalysisService _stabilizationService;
     private readonly MediaIntelligenceImportService _mediaIntelligenceImportService = new();
     private readonly MediaIntelligenceSearchService _mediaIntelligenceSearchService = new();
+    private readonly MediaAgentContextBuilder _mediaAgentContextBuilder = new();
     private readonly EffectRegistry _effectRegistry = new();
     private readonly RippleState _rippleState = new();
     private readonly PreviewFrameScheduler _previewScheduler;
@@ -143,7 +149,23 @@ public partial class MainWindow : Window
         _recentProjectsService = new RecentProjectsService(_settingsService);
         _layout = _workspaceService.Load();
         _settings = _settingsService.Load("editor", new EditorSettings());
+        _visualProviderCredentialRotation = new VisualProviderCredentialRotationService(
+            () => _settings,
+            settings => _settingsService.Save("editor", settings));
         _intelligenceBackend = new IntelligenceBackendService(Math.Clamp(_settings.IntelligenceBackendPort, 1024, 65535));
+        _soundLibraryCatalogService = new SoundLibraryCatalogService(
+            FindRepoRoot(),
+            Path.Combine(_appData, "SoundLibrary", "catalog.sqlite"));
+        _soundLibraryWatchService = new SoundLibraryWatchService(
+            cancellationToken => _soundLibraryCatalogService.GetStatusAsync(cancellationToken),
+            async (root, cancellationToken) =>
+            {
+                await IndexSoundFolderAsync(root, cancellationToken);
+            });
+        _soundLibraryWatchService.RootIndexed += (_, _) => Dispatcher.BeginInvoke(() =>
+            _soundLibraryWindow?.RefreshAssets());
+        _soundLibraryWatchService.IndexFailed += (_, message) => Dispatcher.BeginInvoke(() =>
+            StatusText.Text = $"Sound-library watch failed: {message}");
         _localAgentBridge = new LocalAgentBridgeService(HandleLocalAgentBridgeRequestAsync);
         _agentEditPlanCompiler = new AgentEditPlanCompiler(_agentEditCommandFactory);
         _externalCompositionService = new ExternalCompositionService(_mediaService);
@@ -219,6 +241,14 @@ public partial class MainWindow : Window
             }
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             await LoadOptionalCapabilitiesAsync();
+            try
+            {
+                await _soundLibraryWatchService.RefreshAsync();
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Sound-library watch unavailable: {ex.Message}";
+            }
             _performanceTelemetry.RecordStartupMilestone("optional_capabilities_loaded", _startupClock.Elapsed);
             _performanceTelemetry.RecordStartupMilestone("empty_project_ready", _startupClock.Elapsed);
             if (_settings.StartIntelligenceBackend)
@@ -270,7 +300,7 @@ public partial class MainWindow : Window
             UpdateMediaIntelligenceActionState();
             CommandManager.InvalidateRequerySuggested();
         };
-        AddToTimelineButton.Click += (_, _) => AddSelectedMediaToTimeline();
+        AddToTimelineButton.Click += async (_, _) => await AddSelectedMediaToTimelineAsync();
         CreativeAssetsButton.Click += async (_, _) => await ShowCreativeAssetsAsync();
         PreviewSelectedMediaButton.Click += (_, _) => PreviewSelectedMedia();
         RunMediaIntelligenceButton.Click += async (_, _) => await RunMediaIntelligenceAsync();
@@ -289,8 +319,8 @@ public partial class MainWindow : Window
         AnalyzeTranscriptToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
         AnalyzeMusicToggle.Checked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
         AnalyzeMusicToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
-        AnalyzeGeminiToggle.Checked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
-        AnalyzeGeminiToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeVisualsToggle.Checked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
+        AnalyzeVisualsToggle.Unchecked += (_, _) => UpdateMediaIntelligenceFeatureDependencies();
         UpdateMediaIntelligenceFeatureDependencies();
         UpdateMediaIntelligenceActionState();
         MediaSearchBox.TextChanged += (_, _) =>
@@ -447,8 +477,8 @@ public partial class MainWindow : Window
         RestartAutosave();
         WriteStartupDiagnostic("editor_layout.end");
 
-        CommandBindings.Add(new CommandBinding(EditorCommands.NewProject, NewProject_Executed));
-        CommandBindings.Add(new CommandBinding(EditorCommands.OpenProject, OpenProject_Executed));
+        CommandBindings.Add(new CommandBinding(EditorCommands.NewProject, NewProject_Executed, ProjectReplacement_CanExecute));
+        CommandBindings.Add(new CommandBinding(EditorCommands.OpenProject, OpenProject_Executed, ProjectReplacement_CanExecute));
         CommandBindings.Add(new CommandBinding(EditorCommands.SaveProject, SaveProject_Executed));
         CommandBindings.Add(new CommandBinding(EditorCommands.ImportMedia, ImportMedia_Executed, MediaOperation_CanExecute));
         CommandBindings.Add(new CommandBinding(EditorCommands.RelinkMedia, RelinkMedia_Executed, SelectedMedia_CanExecute));
@@ -488,6 +518,7 @@ public partial class MainWindow : Window
             _timelinePlayheadOverlay?.Dispose();
             _saveCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _autosave.StopBackgroundAsync().GetAwaiter().GetResult();
+            _soundLibraryWatchService.Dispose();
             _intelligenceBackend.Dispose();
             _localAgentBridge.Dispose();
             if (_performanceTelemetry.DetailedEnabled)
@@ -591,6 +622,9 @@ public partial class MainWindow : Window
         _timeline.ClipVolumeRequested += (_, args) => SetClipVolume(args);
         _timeline.GroupMoveRequested += (_, args) => MoveClipGroup(args);
         _timeline.GroupTrimRequested += (_, args) => TrimClipGroup(args);
+        _timeline.MediaDropRequested += HandleTimelineMediaDrop;
+        _timeline.MediaDragPreviewRequested += HandleTimelineMediaDragPreview;
+        _timeline.MediaDragPreviewCleared += (_, _) => StatusText.Text = "Ready";
         _timeline.ZoomScaleChanged += (_, scale) =>
         {
             var sliderValue = Math.Clamp(scale, ZoomSlider.Minimum, ZoomSlider.Maximum);
@@ -615,6 +649,9 @@ public partial class MainWindow : Window
         RefreshMediaList();
         EffectCombo.ItemsSource = _effectRegistry.GetAll();
         TransitionKindCombo.ItemsSource = Enum.GetValues<TransitionKind>();
+        TransitionAudioModeCombo.ItemsSource = Enum.GetValues<TransitionAudioMode>();
+        VisualTransitionInCombo.ItemsSource = Enum.GetValues<ItemTransitionKind>();
+        VisualTransitionOutCombo.ItemsSource = Enum.GetValues<ItemTransitionKind>();
         UpdateInspector(null);
     }
 
@@ -813,6 +850,15 @@ public partial class MainWindow : Window
             if (panel.CanClose) item.Click += PanelMenuItem_Click;
             PanelsMenu.Items.Add(item);
         }
+
+        PanelsMenu.Items.Add(new Separator());
+        var soundLibraryItem = new MenuItem
+        {
+            Header = "Sound Library",
+            ToolTip = "Open the local sound library and drag audio onto the timeline",
+        };
+        soundLibraryItem.Click += (_, _) => ShowSoundLibrary();
+        PanelsMenu.Items.Add(soundLibraryItem);
     }
 
     private void PanelMenuItem_Click(object sender, RoutedEventArgs e)
@@ -847,7 +893,6 @@ public partial class MainWindow : Window
         ApplyLayout();
         if (opening && IsUtilityPanel(panelId) && GetUtilityInspectorTab(panelId) is { } tab)
             tab.IsSelected = true;
-        UpdateInspectorTabControls();
         UpdateMediaFilterButtons();
         SaveLayout();
     }
@@ -1072,6 +1117,7 @@ public partial class MainWindow : Window
             BrightnessBox, ContrastBox, SaturationBox, VolumeBox, PanBox, FadeInBox, FadeOutBox,
             FontSizeBox, TextOutlineWidthBox, TextShadowOpacityBox,
             TransitionDurationBox, TransitionAlignmentBox,
+            VisualTransitionInDurationBox, VisualTransitionOutDurationBox,
         };
 
         foreach (var textBox in numericTextBoxes)
@@ -1097,6 +1143,9 @@ public partial class MainWindow : Window
         }
 
         TransitionKindCombo.SelectionChanged += InspectorControlChanged;
+        TransitionAudioModeCombo.SelectionChanged += InspectorControlChanged;
+        VisualTransitionInCombo.SelectionChanged += InspectorControlChanged;
+        VisualTransitionOutCombo.SelectionChanged += InspectorControlChanged;
         FontFamilyCombo.SelectionChanged += InspectorControlChanged;
         FontFamilyCombo.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler(InspectorControlChanged));
         FontAlignCombo.SelectionChanged += InspectorControlChanged;
@@ -1561,7 +1610,6 @@ public partial class MainWindow : Window
             _installedAssetProviders.AddRange(await providersTask);
             _installedExtensions.Clear();
             _installedExtensions.AddRange(await extensionsTask);
-            MergeInstalledCapabilities(_project);
         }
         catch (Exception ex)
         {
@@ -1616,12 +1664,15 @@ public partial class MainWindow : Window
     private async Task StartIntelligenceBackendAsync()
     {
         var repoRoot = FindRepoRoot();
-        var apiKey = SecretProtectionService.Unprotect(_settings.ProtectedGeminiApiKey);
+        var apiKey = (_settings.ProtectedGroqApiKeys ?? [])
+            .Select(SecretProtectionService.Unprotect)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
         StatusText.Text = "Starting intelligence backend…";
         var started = await _intelligenceBackend.StartAsync(
             repoRoot,
             apiKey,
-            _localAgentBridge.SessionToken);
+            _localAgentBridge.SessionToken,
+            _soundLibraryCatalogService.CatalogPath);
         StatusText.Text = started
             ? $"Intelligence backend ready on {_intelligenceBackend.BaseUri}"
             : "Intelligence backend unavailable — run the intelligence setup script";
@@ -1662,19 +1713,19 @@ public partial class MainWindow : Window
             "• .NET 10 SDK\n• Python 3\n• FFmpeg at .tools\\bin\\ffmpeg.exe\n• 16 GB RAM is enough for the core CPU setup"));
         panel.Children.Add(CreateSetupSection(
             "Recommended core install",
-            coreCommand + "\n\nInstalls scene detection, faster-whisper, audio/beat analysis, OpenCV, semantic search, and Gemini support."));
+            coreCommand + "\n\nInstalls scene detection, faster-whisper, audio/beat analysis, OpenCV, semantic search, and Groq visual support."));
         panel.Children.Add(CreateSetupSection(
             "Optional advanced install",
-            advancedCommand + "\n\nAdds WhisperX, speaker detection, OCR, sound-event recognition, and local Qwen support. This is much heavier and is not recommended on a CPU-only 16 GB machine unless needed."));
+            advancedCommand + "\n\nAdds WhisperX word alignment, speaker detection, PaddleOCR, and sound-event recognition. This is much heavier and is not recommended on a CPU-only 16 GB machine unless needed."));
         panel.Children.Add(CreateSetupSection(
             "Verify installation",
             doctorCommand));
         panel.Children.Add(CreateSetupSection(
             "Local agent connection",
-            $"MCP endpoint: {GetMcpEndpoint()}\nHealth: {_intelligenceBackend.BaseUri}health\nTools: rushframe.capabilities, rushframe.search_moments, rushframe.get_agent_context, rushframe.get_timeline_state, rushframe.apply_timeline_edit, rushframe.render_timeline\nThe endpoint and live editor bridge are local-only and available while Rushframe is running."));
+            $"MCP endpoint: {GetMcpEndpoint()}\nHealth: {_intelligenceBackend.BaseUri}health\nTools: rushframe.capabilities, rushframe.get_editing_context, rushframe.search_moments, rushframe.get_agent_context, rushframe.get_timeline_state, rushframe.preview_edit_plan, rushframe.review_edit_plan, rushframe.apply_edit_plan, rushframe.apply_timeline_edit, rushframe.render_timeline\nThe endpoint and live editor bridge are local-only and available while Rushframe is running."));
         panel.Children.Add(CreateSetupSection(
             "Recommended settings for 16 GB RAM / no GPU",
-            "Whisper: base, CPU int8\nAI input: 5–10 minutes\nVisual provider: Gemini\nOCR/alignment/diarization/sound events: Off\nParallel analysis jobs: 1"));
+            "Whisper: base, CPU int8\nAI input: 5–10 minutes\nVisual provider: GroqCloud\nOCR/alignment/diarization/sound events: Off\nParallel analysis jobs: 1"));
 
         var buttons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
         var copyCore = new Button { Content = "Copy Core Install", MinWidth = 130, Margin = new Thickness(0, 0, 8, 8) };
@@ -1803,10 +1854,10 @@ public partial class MainWindow : Window
         panel.Children.Add(statusPanel);
         panel.Children.Add(CreateSetupSection(
             "Local agent connection",
-            $"MCP endpoint: {GetMcpEndpoint()}\nHealth: {_intelligenceBackend.BaseUri}health\nTools: rushframe.capabilities, rushframe.search_moments, rushframe.get_agent_context, rushframe.get_timeline_state, rushframe.apply_timeline_edit, rushframe.render_timeline\nThe endpoint and live editor bridge are local-only and available while Rushframe is running."));
+            $"MCP endpoint: {GetMcpEndpoint()}\nHealth: {_intelligenceBackend.BaseUri}health\nTools: rushframe.capabilities, rushframe.get_editing_context, rushframe.search_moments, rushframe.get_agent_context, rushframe.get_timeline_state, rushframe.preview_edit_plan, rushframe.review_edit_plan, rushframe.apply_edit_plan, rushframe.apply_timeline_edit, rushframe.render_timeline\nThe endpoint and live editor bridge are local-only and available while Rushframe is running."));
         panel.Children.Add(CreateSetupSection(
             "Recommended settings for 16 GB RAM / no GPU",
-            "Whisper: base, CPU int8\nAI input: 5-10 minutes\nVisual provider: Gemini\nOCR/alignment/diarization/sound events: Off\nParallel analysis jobs: 1"));
+            "Whisper: base, CPU int8\nAI input: 5-10 minutes\nVisual provider: GroqCloud\nOCR/alignment/diarization/sound events: Off\nParallel analysis jobs: 1"));
         panel.Children.Add(new TextBlock
         {
             Text = "Setup log",
@@ -2062,6 +2113,10 @@ public partial class MainWindow : Window
             "capabilities" => BuildAgentCapabilities(),
             "timeline" => BuildAgentTimelineState(),
             "transcript" => BuildAgentTranscriptState(payload ?? default),
+            "search-context" => BuildAgentMediaSearch(payload ?? default),
+            "agent-context" => BuildAgentMediaContext(payload ?? default),
+            "editing-context" => BuildAgentEditingContext(payload ?? default),
+            "sound-library-registrations" => BuildAgentSoundLibraryRegistrations(),
             "workflow" => BuildAgentWorkflowState(),
             "providers" => BuildAgentProviderState(),
             "upsert-provider" => UpsertAgentProvider(payload ?? default),
@@ -2080,6 +2135,7 @@ public partial class MainWindow : Window
             "receipts" => new { ok = true, receipts = _project.RenderReceipts.TakeLast(50).ToArray() },
             "audit" => new { ok = true, entries = _agentAuditLog.TakeLast(50).ToArray() },
             "plan" => PreviewAgentEditPlan(payload ?? default),
+            "review-plan" => await ReviewAgentEditPlanAsync(payload ?? default, cancellationToken),
             "apply-plan" => await ApplyAgentEditPlanAsync(payload ?? default, cancellationToken),
             "edit" => await ApplyAgentTimelineEditAsync(payload ?? default, cancellationToken),
             "render" => await RenderAgentTimelineAsync(payload ?? default, cancellationToken),
@@ -2092,21 +2148,43 @@ public partial class MainWindow : Window
         ok = true,
         protocolVersion = 2,
         projectSchemaVersion = Project.CurrentSchemaVersion,
+        editingContext = new
+        {
+            endpoint = "editing-context",
+            schemaVersion = AgentEditingContextBuilder.SchemaVersion,
+            compact = true,
+            bounded = true,
+            pathSafe = true,
+            includes = new[] { "campaign", "editing-brief", "tasks", "playhead", "selection", "timeline-summary", "locks", "media-readiness", "quality-issues", "edit-skill-summary" },
+        },
         editPlan = new
         {
             endpoint = "apply-plan",
             previewEndpoint = "plan",
+            roughCutReviewEndpoint = "review-plan",
             maximumOperations = 100,
             atomic = true,
             undoable = true,
             revisionRequired = true,
             approvalDefault = true,
+            actionCatalogVersion = AgentEditSkillCatalog.SchemaVersion,
             actions = AgentEditCommandFactory.SupportedActions,
+            skills = AgentEditSkillCatalog.Skills,
         },
-        evidence = new[] { "timeline", "transcript", "workflow", "variants", "compositions", "receipts", "audit" },
+        recommendedWorkflow = new[]
+        {
+            "get_editing_context",
+            "search_moments_when_needed",
+            "preview_edit_plan",
+            "review_edit_plan_when_quality_risk_is_material",
+            "apply_edit_plan_after_user_approval",
+            "refresh_context_after_revision_change",
+        },
+        evidence = new[] { "editing-context", "timeline", "transcript", "workflow", "variants", "compositions", "receipts", "audit", "sound-library-registrations" },
         constraints = new[]
         {
             "registered-local-media-only",
+            "catalog-sounds-require-explicit-project-registration-before-agent-use",
             "no-source-file-mutation",
             "locked-items-and-tracks-are-protected",
             "manual-edits-win-through-project-revision-conflicts",
@@ -2186,6 +2264,154 @@ public partial class MainWindow : Window
             warnings = analysis.Warnings,
             editPolicy = _project.TranscriptEditPolicy,
         };
+    }
+
+    private object BuildAgentMediaSearch(JsonElement payload)
+    {
+        var analysis = ResolveAgentMediaAnalysis(payload);
+        var query = AgentPayloadReader.ReadString(payload, "query") ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(query))
+            throw new InvalidOperationException("query is required");
+        var limit = Math.Clamp(AgentPayloadReader.ReadInt(payload, "limit", 12), 1, 50);
+        var minimumScore = Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "min_score", 0), 0, 1);
+        double? maximumDuration = AgentPayloadReader.HasProperty(payload, "max_duration")
+            ? Math.Max(0.001, AgentPayloadReader.ReadSeconds(payload, "max_duration", 0))
+            : null;
+        var results = _mediaIntelligenceSearchService.Search(
+            analysis,
+            new MediaMomentSearchQuery(
+                query,
+                analysis.MediaAssetId,
+                ReadStringArray(payload, "roles"),
+                minimumScore,
+                maximumDuration,
+                limit));
+        return new
+        {
+            ok = true,
+            mediaAssetId = analysis.MediaAssetId.ToString(),
+            results,
+        };
+    }
+
+    private object BuildAgentMediaContext(JsonElement payload)
+    {
+        var analysis = ResolveAgentMediaAnalysis(payload);
+        var context = _mediaAgentContextBuilder.Build(
+            analysis,
+            new MediaAgentContextRequest(
+                AgentPayloadReader.ReadString(payload, "query") ?? string.Empty,
+                analysis.MediaAssetId,
+                ReadStringArray(payload, "roles"),
+                Math.Clamp(AgentPayloadReader.ReadInt(payload, "limit", 20), 1, 50),
+                Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "min_score", 0), 0, 1)));
+        var relationships = _project.MediaRelationships
+            .Where(value => value.Source.MediaAssetId == analysis.MediaAssetId || value.Target.MediaAssetId == analysis.MediaAssetId)
+            .OrderByDescending(value => value.Score)
+            .Take(100)
+            .ToArray();
+        return new { ok = true, context, relationships };
+    }
+
+    private object BuildAgentEditingContext(JsonElement payload)
+    {
+        var sequence = _project.MainSequence;
+        if (sequence == null) return new { ok = false, error = "No active sequence" };
+
+        var context = AgentEditingContextBuilder.Build(
+            _project,
+            sequence,
+            _timeline?.PlayheadTime.Seconds ?? 0,
+            _timeline?.SelectedItem?.Id,
+            new AgentEditingContextRequest(
+                Math.Clamp(AgentPayloadReader.ReadInt(payload, "item_limit", 250), 25, 500),
+                Math.Clamp(AgentPayloadReader.ReadInt(payload, "media_asset_limit", 200), 1, 500),
+                AgentPayloadReader.ReadBool(payload, "include_completed_tasks", false)));
+
+        object? mediaContext = null;
+        IReadOnlyList<MediaRelationship> relationships = [];
+        var includeMediaContext = AgentPayloadReader.ReadBool(payload, "include_media_context", true);
+        var availableAnalyses = _project.MediaIntelligence
+            .Where(candidate => _project.MediaLibrary.Any(asset => asset.Id == candidate.MediaAssetId))
+            .Take(2)
+            .ToArray();
+        if (includeMediaContext)
+        {
+            MediaIntelligenceAnalysis? analysis = null;
+            if (AgentPayloadReader.ReadString(payload, "media_asset_id") is { Length: > 0 })
+                analysis = ResolveAgentMediaAnalysis(payload);
+            else if (availableAnalyses.Length == 1)
+                analysis = availableAnalyses[0];
+
+            if (analysis != null)
+            {
+                var rawContext = _mediaAgentContextBuilder.Build(
+                    analysis,
+                    new MediaAgentContextRequest(
+                        AgentPayloadReader.ReadString(payload, "query") ?? string.Empty,
+                        analysis.MediaAssetId,
+                        ReadStringArray(payload, "roles"),
+                        Math.Clamp(AgentPayloadReader.ReadInt(payload, "moment_limit", 12), 1, 50),
+                        Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "min_score", 0), 0, 1)));
+                mediaContext = new
+                {
+                    rawContext.ContextSchemaVersion,
+                    source = new
+                    {
+                        rawContext.Source.MediaAssetId,
+                        sourceName = Path.GetFileName(rawContext.Source.SourcePath),
+                        rawContext.Source.SourceChecksum,
+                        rawContext.Source.DurationSeconds,
+                        rawContext.Source.Orientation,
+                        rawContext.Source.Width,
+                        rawContext.Source.Height,
+                        rawContext.Source.FramesPerSecond,
+                        rawContext.Source.HasVideo,
+                        rawContext.Source.HasAudio,
+                    },
+                    rawContext.Summary,
+                    rawContext.Moments,
+                    rawContext.DuplicateTakeGroups,
+                    rawContext.Warnings,
+                };
+                relationships = _project.MediaRelationships
+                    .Where(value => value.Source.MediaAssetId == analysis.MediaAssetId || value.Target.MediaAssetId == analysis.MediaAssetId)
+                    .OrderByDescending(value => value.Score)
+                    .Take(100)
+                    .ToArray();
+            }
+        }
+
+        return new
+        {
+            ok = true,
+            context,
+            mediaContext,
+            mediaContextSelectionRequired = includeMediaContext && mediaContext == null && availableAnalyses.Length > 1,
+            relationships,
+        };
+    }
+
+    private MediaIntelligenceAnalysis ResolveAgentMediaAnalysis(JsonElement payload)
+    {
+        if (AgentPayloadReader.ReadString(payload, "media_asset_id") is { Length: > 0 } assetText)
+        {
+            if (!Guid.TryParse(assetText, out var assetGuid))
+                throw new InvalidOperationException("media_asset_id is invalid");
+            var assetId = new MediaAssetId(assetGuid);
+            if (_project.MediaLibrary.All(asset => asset.Id != assetId))
+                throw new InvalidOperationException("Media asset is not registered in the open project");
+            return _project.MediaIntelligence.FirstOrDefault(candidate => candidate.MediaAssetId == assetId)
+                   ?? throw new InvalidOperationException("Registered media has no loaded analysis");
+        }
+
+        if (_project.MediaIntelligence.Count == 1)
+        {
+            var analysis = _project.MediaIntelligence[0];
+            if (_project.MediaLibrary.Any(asset => asset.Id == analysis.MediaAssetId)) return analysis;
+        }
+
+        throw new InvalidOperationException("media_asset_id is required when the open project has zero or multiple analyzed assets");
     }
 
     private object BuildAgentWorkflowState() => new
@@ -2402,7 +2628,6 @@ public partial class MainWindow : Window
             return new { ok = false, error = $"Unknown workflow status '{statusText}'" };
         var requiresHumanDecision = stage.RequiresApproval && status is ProductionStageStatus.Approved or ProductionStageStatus.Completed;
         if (requiresHumanDecision
-            && AgentPayloadReader.ReadBool(payload, "require_approval", true)
             && !ConfirmAgentEdit($"Approve workflow stage '{stage.Name}' as {status}?"))
             return new { ok = false, rejected = true, error = "User rejected workflow stage change" };
 
@@ -2441,8 +2666,8 @@ public partial class MainWindow : Window
         if (!options.Contains(selected, StringComparer.OrdinalIgnoreCase))
             return new { ok = false, error = "selected_option must be present in options_considered" };
         var userVisible = AgentPayloadReader.ReadBool(payload, "user_visible", true);
-        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", userVisible);
-        if (requireApproval && !ConfirmAgentEdit($"Production decision:\n{question}\n\nChoose: {selected}"))
+        const bool requireApproval = true;
+        if (!ConfirmAgentEdit($"Production decision:\n{question}\n\nChoose: {selected}"))
             return new { ok = false, rejected = true, error = "User rejected production decision" };
 
         var decision = new ProductionDecision
@@ -2478,7 +2703,7 @@ public partial class MainWindow : Window
         var width = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "width", existing?.Width ?? 1080), 2, 16384));
         var height = MakeEven(Math.Clamp(AgentPayloadReader.ReadInt(payload, "height", existing?.Height ?? 1920), 2, 16384));
         var summary = $"Configure export variant '{name}' at {width}×{height}";
-        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+        if (!ConfirmAgentEdit(summary))
             return new { ok = false, rejected = true, error = "User rejected export variant change" };
 
         ExportVariant variant;
@@ -2536,7 +2761,10 @@ public partial class MainWindow : Window
         return new { ok = true, revision = _project.Revision, variant };
     }
 
-    private async Task<object> RenderAgentVariantAsync(JsonElement payload, CancellationToken cancellationToken)
+    private async Task<object> RenderAgentVariantAsync(
+        JsonElement payload,
+        CancellationToken cancellationToken,
+        bool approvalAlreadyGranted = false)
     {
         if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
         var variantId = AgentPayloadReader.ReadRequiredString(payload, "variant_id");
@@ -2546,14 +2774,17 @@ public partial class MainWindow : Window
             ? _project.Sequences.FirstOrDefault(candidate => candidate.Id == sequenceId)
             : _project.MainSequence;
         if (sequence == null) return new { ok = false, error = "Variant sequence not found" };
+        var variantLicenseIssues = SoundLicenseGuard.FindIssues(_project, sequence);
+        if (variantLicenseIssues.Count > 0)
+            return new { ok = false, error = SoundLicenseGuard.FormatBlockingMessage(variantLicenseIssues), soundLicenseIssues = variantLicenseIssues };
         if (variant.MaximumDurationSeconds.HasValue && sequence.Duration.Seconds > variant.MaximumDurationSeconds.Value + 0.001)
             return new { ok = false, error = $"Timeline exceeds variant maximum duration of {variant.MaximumDurationSeconds:0.##}s" };
         var outputPath = ValidateAgentOutputPath(AgentPayloadReader.ReadRequiredString(payload, "output_path"));
         var summary = $"Render variant '{variant.Name}' to {outputPath}";
-        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+        if (!approvalAlreadyGranted && !ConfirmAgentEdit(summary))
             return new { ok = false, rejected = true, error = "User rejected variant render" };
 
-        variant.Status = ExportVariantStatus.Rendering;
+        var projectContext = CaptureProjectOperationContext();
         var (renderProject, renderSequence) = CreateVariantRenderContext(variant);
         var format = Enum.TryParse<TimelineExportFormat>(variant.Format, true, out var parsedFormat) ? parsedFormat : TimelineExportFormat.Mp4;
         var quality = Enum.TryParse<TimelineExportQuality>(variant.Quality, true, out var parsedQuality) ? parsedQuality : TimelineExportQuality.High;
@@ -2580,9 +2811,11 @@ public partial class MainWindow : Window
                 outputWidth: variant.Width,
                 outputHeight: variant.Height,
                 exportOptions: options);
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; render state was not committed." };
             SetAgentRenderJobVerifying(renderJob);
             var receipt = await _renderReceiptService.CreateAsync(
-                _project,
+                renderProject,
                 renderSequence,
                 outputPath,
                 variant.Width,
@@ -2591,20 +2824,25 @@ public partial class MainWindow : Window
                 approvalSource: "agent-variant-render",
                 variantId: variant.Id,
                 cancellationToken);
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; render receipt was not committed." };
             CompleteAgentRenderJob(renderJob, receipt);
             AddAgentAudit("render_variant", summary, receipt.Status != RenderVerificationStatus.Failed, receipt.Status == RenderVerificationStatus.Failed ? "Verification failed" : null);
             return new { ok = receipt.Status != RenderVerificationStatus.Failed, revision = _project.Revision, outputPath, renderJob, receipt };
         }
         catch (OperationCanceledException)
         {
-            variant.Status = ExportVariantStatus.Failed;
-            FailAgentRenderJob(renderJob, "Variant render was canceled", canceled: true);
-            AddAgentAudit("render_variant", summary, false, "Variant render was canceled");
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                FailAgentRenderJob(renderJob, "Variant render was canceled", canceled: true);
+                AddAgentAudit("render_variant", summary, false, "Variant render was canceled");
+            }
             throw;
         }
         catch (Exception ex)
         {
-            variant.Status = ExportVariantStatus.Failed;
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; failed render state was not committed." };
             FailAgentRenderJob(renderJob, ex.Message);
             AddAgentAudit("render_variant", summary, false, ex.Message);
             return new { ok = false, revision = _project.Revision, renderJob, error = ex.Message };
@@ -2618,7 +2856,7 @@ public partial class MainWindow : Window
         var validation = _externalCompositionService.Validate(spec, _currentProjectPath);
         if (!validation.Success) return new { ok = false, errors = validation.Errors, warnings = validation.Warnings };
         var summary = $"Register local {spec.Kind} composition '{spec.Name}'";
-        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+        if (!ConfirmAgentEdit(summary))
             return new { ok = false, rejected = true, error = "User rejected composition registration" };
         using (var mutation = _saveCoordinator.BeginMutation())
         {
@@ -2633,16 +2871,20 @@ public partial class MainWindow : Window
         return new { ok = true, revision = _project.Revision, composition = spec, warnings = validation.Warnings };
     }
 
-    private async Task<object> RenderAgentCompositionAsync(JsonElement payload, CancellationToken cancellationToken)
+    private async Task<object> RenderAgentCompositionAsync(
+        JsonElement payload,
+        CancellationToken cancellationToken,
+        bool approvalAlreadyGranted = false)
     {
         if (!TryValidateAgentRevision(payload, out var conflict)) return conflict!;
         var id = AgentPayloadReader.ReadRequiredString(payload, "composition_id");
         var spec = _project.ExternalCompositions.FirstOrDefault(candidate => candidate.Id == id);
         if (spec == null) return new { ok = false, error = "External composition not found" };
         var summary = $"Render local {spec.Kind} composition '{spec.Name}'";
-        if (AgentPayloadReader.ReadBool(payload, "require_approval", true) && !ConfirmAgentEdit(summary))
+        if (!approvalAlreadyGranted && !ConfirmAgentEdit(summary))
             return new { ok = false, rejected = true, error = "User rejected composition render" };
 
+        var projectContext = CaptureProjectOperationContext();
         var compositionOutputPath = string.IsNullOrWhiteSpace(spec.OutputPath)
             ? Path.Combine(spec.ProjectDirectory, "renders", $"{spec.Name}.{(spec.TransparentBackground ? "webm" : "mp4")}")
             : spec.OutputPath;
@@ -2665,16 +2907,23 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            FailAgentRenderJob(renderJob, "Composition render was canceled", canceled: true);
-            AddAgentAudit("render_composition", summary, false, "Composition render was canceled");
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                FailAgentRenderJob(renderJob, "Composition render was canceled", canceled: true);
+                AddAgentAudit("render_composition", summary, false, "Composition render was canceled");
+            }
             throw;
         }
         catch (Exception ex)
         {
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; failed composition state was not committed." };
             FailAgentRenderJob(renderJob, ex.Message);
             AddAgentAudit("render_composition", summary, false, ex.Message);
             return new { ok = false, revision = _project.Revision, renderJob, error = ex.Message };
         }
+        if (!IsCurrentProjectOperation(projectContext))
+            return new { ok = false, conflict = true, error = "The originating project is no longer open; composition state was not committed." };
         if (!result.Success || result.OutputPath == null)
         {
             var error = string.Join(" ", result.Errors);
@@ -2689,19 +2938,28 @@ public partial class MainWindow : Window
                 string.Equals(Path.GetFullPath(asset.OriginalPath), fullOutput, StringComparison.OrdinalIgnoreCase))
             : null;
         var generatedAsset = spec.ImportAfterRender && imported == null
-            ? await CreateGeneratedCompositionAssetAsync(spec, fullOutput)
+            ? await CreateGeneratedCompositionAssetAsync(spec, fullOutput, cancellationToken)
             : null;
-        using (var mutation = _saveCoordinator.BeginMutation())
+        if (!IsCurrentProjectOperation(projectContext))
+            return new { ok = false, conflict = true, error = "The originating project is no longer open; generated media was not imported." };
+        CompleteAgentRenderJob(renderJob, applyAdditionalState: () =>
         {
+            spec.OutputPath = fullOutput;
+            spec.LastOutputSha256 = result.OutputSha256;
+            spec.LastRenderedUtc = DateTimeOffset.UtcNow;
+            spec.Status = result.Verification?.Status == MediaExportVerificationStatus.Failed
+                ? ExternalCompositionStatus.Failed
+                : ExternalCompositionStatus.Rendered;
+            spec.LastError = spec.Status == ExternalCompositionStatus.Failed
+                ? string.Join(" ", result.Verification?.Errors ?? result.Errors)
+                : null;
             if (generatedAsset != null)
             {
                 _project.MediaLibrary.Add(generatedAsset);
                 imported = generatedAsset;
             }
-            _project.IncrementRevision();
-        }
+        });
         if (generatedAsset != null) RefreshMediaList();
-        CompleteAgentRenderJob(renderJob);
         MarkProjectDirty("External composition rendered and imported");
         AddAgentAudit("render_composition", summary, true, null);
         return new
@@ -2768,16 +3026,7 @@ public partial class MainWindow : Window
         var allowedDirectory = !string.IsNullOrWhiteSpace(_currentProjectPath)
             ? Path.GetDirectoryName(Path.GetFullPath(_currentProjectPath))!
             : Path.Combine(_appData, "agent-exports");
-        Directory.CreateDirectory(allowedDirectory);
-        var output = Path.IsPathRooted(requestedPath)
-            ? Path.GetFullPath(requestedPath)
-            : Path.GetFullPath(Path.Combine(allowedDirectory, requestedPath));
-        var root = allowedDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Agent render output must stay inside the saved Rushframe project directory.");
-        if (output.StartsWith("\\\\", StringComparison.Ordinal) || output.StartsWith("//", StringComparison.Ordinal))
-            throw new InvalidOperationException("Agent render output must use a local drive.");
-        return output;
+        return LocalOutputPathGuard.Resolve(allowedDirectory, requestedPath);
     }
 
     private void ReadyNextWorkflowStage(ProductionWorkflowStage current)
@@ -2858,6 +3107,11 @@ public partial class MainWindow : Window
             job.HardwareEncoding = hardwareEncoding;
         }
         job.Status = RenderJobStatus.Rendering;
+        if (!string.IsNullOrWhiteSpace(variantId))
+        {
+            var liveVariant = _project.ExportVariants.FirstOrDefault(candidate => candidate.Id == variantId);
+            if (liveVariant != null) liveVariant.Status = ExportVariantStatus.Rendering;
+        }
         job.AttemptCount++;
         job.StartedUtc = DateTimeOffset.UtcNow;
         job.CompletedUtc = null;
@@ -2876,9 +3130,14 @@ public partial class MainWindow : Window
         MarkProjectDirty("Render job verifying");
     }
 
-    private void CompleteAgentRenderJob(RenderJobRecord job, RenderReceiptDocument? receipt = null)
+    private void CompleteAgentRenderJob(
+        RenderJobRecord job,
+        RenderReceiptDocument? receipt = null,
+        Action? applyAdditionalState = null)
     {
         using var mutation = _saveCoordinator.BeginMutation();
+        if (receipt != null) RenderReceiptService.ApplyToProject(_project, receipt);
+        applyAdditionalState?.Invoke();
         job.Status = receipt?.Status == RenderVerificationStatus.Failed
             ? RenderJobStatus.Failed
             : RenderJobStatus.Completed;
@@ -2894,6 +3153,20 @@ public partial class MainWindow : Window
     private void FailAgentRenderJob(RenderJobRecord job, string error, bool canceled = false)
     {
         using var mutation = _saveCoordinator.BeginMutation();
+        if (!string.IsNullOrWhiteSpace(job.VariantId))
+        {
+            var variant = _project.ExportVariants.FirstOrDefault(candidate => candidate.Id == job.VariantId);
+            if (variant != null) variant.Status = ExportVariantStatus.Failed;
+        }
+        if (!string.IsNullOrWhiteSpace(job.CompositionId))
+        {
+            var composition = _project.ExternalCompositions.FirstOrDefault(candidate => candidate.Id == job.CompositionId);
+            if (composition != null)
+            {
+                composition.Status = ExternalCompositionStatus.Failed;
+                composition.LastError = error;
+            }
+        }
         job.Status = canceled ? RenderJobStatus.Canceled : RenderJobStatus.Failed;
         job.LastError = error;
         job.CompletedUtc = DateTimeOffset.UtcNow;
@@ -2913,14 +3186,12 @@ public partial class MainWindow : Window
         var revisionNote = job.SourceRevision == _project.Revision
             ? string.Empty
             : $"\n\nThe project changed from revision {job.SourceRevision} to {_project.Revision}; the retry will use the current project state.";
-        if (AgentPayloadReader.ReadBool(payload, "require_approval", true)
-            && !ConfirmAgentEdit($"Retry {job.Kind} render to {job.OutputPath}?{revisionNote}"))
+        if (!ConfirmAgentEdit($"Retry {job.Kind} render to {job.OutputPath}?{revisionNote}"))
             return new { ok = false, rejected = true, error = "User rejected render retry" };
 
         var values = new Dictionary<string, object?>
         {
             ["base_revision"] = _project.Revision,
-            ["require_approval"] = false,
             ["retry_job_id"] = job.JobId,
             ["output_path"] = job.OutputPath,
             ["width"] = job.Width,
@@ -2936,9 +3207,9 @@ public partial class MainWindow : Window
         var retryPayload = document.RootElement.Clone();
         return job.Kind switch
         {
-            RenderJobKind.Variant => await RenderAgentVariantAsync(retryPayload, cancellationToken),
-            RenderJobKind.ExternalComposition => await RenderAgentCompositionAsync(retryPayload, cancellationToken),
-            _ => await RenderAgentTimelineAsync(retryPayload, cancellationToken),
+            RenderJobKind.Variant => await RenderAgentVariantAsync(retryPayload, cancellationToken, approvalAlreadyGranted: true),
+            RenderJobKind.ExternalComposition => await RenderAgentCompositionAsync(retryPayload, cancellationToken, approvalAlreadyGranted: true),
+            _ => await RenderAgentTimelineAsync(retryPayload, cancellationToken, approvalAlreadyGranted: true),
         };
     }
 
@@ -2972,9 +3243,126 @@ public partial class MainWindow : Window
             operationCount = plan.Operations.Count,
             operations = plan.Operations,
             affectedRanges = plan.AffectedRanges,
+            creativePlan = plan.CreativePlan,
+            qualityScores = plan.QualityScores,
+            qualityIssues = plan.QualityIssues,
+            prompt = new { id = plan.PromptId, version = plan.PromptVersion },
             warnings = plan.Warnings,
             requiresApproval = true,
         };
+    }
+
+    private async Task<object> ReviewAgentEditPlanAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var liveSequence = _project.MainSequence;
+        if (liveSequence == null) return new { ok = false, error = "No active sequence" };
+        var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
+        if (baseRevision != _project.Revision)
+        {
+            return new
+            {
+                ok = false,
+                conflict = true,
+                error = "Timeline revision conflict. Refresh timeline state before reviewing the plan.",
+                expectedRevision = _project.Revision,
+                receivedRevision = baseRevision,
+            };
+        }
+
+        var reviewProject = ProjectSerializer.CreateSnapshot(_project);
+        var reviewSequence = reviewProject.Sequences.FirstOrDefault(candidate => candidate.Id == liveSequence.Id);
+        if (reviewSequence == null) return new { ok = false, error = "The active sequence was not present in the review snapshot." };
+        var plan = _agentEditPlanCompiler.Compile(reviewProject, reviewSequence, payload, _timeline?.PlayheadTime.Seconds ?? 0);
+        if (!plan.Success || plan.Command == null)
+            return new { ok = false, planId = plan.PlanId, error = plan.Error };
+
+        var applyResult = plan.Command.Execute(reviewSequence);
+        if (!applyResult.Success)
+            return new { ok = false, planId = plan.PlanId, error = applyResult.ErrorMessage ?? "The plan could not be applied to the isolated review snapshot." };
+        reviewProject.IncrementRevision();
+        var qualityIssues = TimelineQualityAnalyzer.Analyze(reviewProject, reviewSequence);
+        var correctionRequest = new
+        {
+            planId = plan.PlanId,
+            originalBaseRevision = _project.Revision,
+            instruction = "Create a corrected edit plan against the unchanged live project revision. Address every error and warning where possible without weakening the editing brief.",
+            issues = qualityIssues,
+            relationships = reviewProject.MediaRelationships.OrderByDescending(value => value.Score).Take(100).ToArray(),
+        };
+
+        if (!AgentPayloadReader.ReadBool(payload, "render_draft", true))
+        {
+            return new
+            {
+                ok = true,
+                isolated = true,
+                rendered = false,
+                planId = plan.PlanId,
+                liveRevision = _project.Revision,
+                reviewRevision = reviewProject.Revision,
+                qualityScores = plan.QualityScores,
+                qualityIssues,
+                correctionRequest,
+            };
+        }
+
+        if (!ConfirmAgentEdit($"Render isolated rough-cut review for plan {plan.PlanId}? The active project will not be modified."))
+            return new { ok = false, rejected = true, planId = plan.PlanId, error = "User rejected rough-cut review render" };
+
+        var maxWidth = Math.Clamp(AgentPayloadReader.ReadInt(payload, "review_width", 960), 320, 1920);
+        var scale = Math.Min(1d, maxWidth / (double)Math.Max(1, reviewSequence.Width));
+        var width = MakeEven(Math.Max(2, (int)Math.Round(reviewSequence.Width * scale)));
+        var height = MakeEven(Math.Max(2, (int)Math.Round(reviewSequence.Height * scale)));
+        var reviewDirectory = Path.Combine(_appData, "agent-reviews", _project.Id.ToString());
+        Directory.CreateDirectory(reviewDirectory);
+        var outputPath = Path.Combine(reviewDirectory, $"{plan.PlanId}-{_project.Revision}.mp4");
+        var options = new TimelineExportOptions(
+            TimelineExportFormat.Mp4,
+            TimelineExportQuality.Draft,
+            IncludeAudio: true,
+            HardwareEncoding: false);
+
+        try
+        {
+            await _mediaService.ExportTimelineAsync(
+                reviewProject,
+                reviewSequence,
+                outputPath,
+                cancellationToken: cancellationToken,
+                outputWidth: width,
+                outputHeight: height,
+                exportOptions: options);
+            var receipt = await _renderReceiptService.CreateAsync(
+                reviewProject,
+                reviewSequence,
+                outputPath,
+                width,
+                height,
+                options,
+                approvalSource: "agent-isolated-rough-cut-review",
+                cancellationToken: cancellationToken);
+            var passed = receipt.Status != RenderVerificationStatus.Failed;
+            AddAgentAudit("review_plan", $"Isolated rough-cut review {plan.PlanId}", passed, passed ? null : "Rough-cut verification failed");
+            return new
+            {
+                ok = passed,
+                isolated = true,
+                rendered = true,
+                planId = plan.PlanId,
+                liveRevision = _project.Revision,
+                reviewRevision = reviewProject.Revision,
+                outputPath,
+                receipt,
+                qualityScores = plan.QualityScores,
+                qualityIssues,
+                correctionRequest,
+            };
+        }
+        catch (Exception ex)
+        {
+            AddAgentAudit("review_plan", $"Isolated rough-cut review {plan.PlanId}", false, ex.Message);
+            return new { ok = false, isolated = true, planId = plan.PlanId, liveRevision = _project.Revision, error = ex.Message, qualityIssues, correctionRequest };
+        }
     }
 
     private async Task<object> ApplyAgentEditPlanAsync(JsonElement payload, CancellationToken cancellationToken)
@@ -3003,38 +3391,22 @@ public partial class MainWindow : Window
             return new { ok = false, planId = plan.PlanId, error = plan.Error };
         }
 
-        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", true);
-        if (requireApproval
-            && new AgentEditPlanPreviewDialog(this, plan).ShowDialog() != true)
+        if (new AgentEditPlanPreviewDialog(this, plan).ShowDialog() != true)
         {
             AddAgentAudit("apply_plan", plan.Summary, false, "User rejected edit plan");
             return new { ok = false, rejected = true, planId = plan.PlanId, error = "User rejected edit plan" };
         }
 
         using var mutation = _saveCoordinator.BeginMutation();
-        var result = _undoRedo.Execute(sequence, plan.Command);
+        var applicationCommand = new AgentPlanApplicationCommand(_project, plan, baseRevision.Value);
+        var result = _undoRedo.Execute(sequence, applicationCommand);
         if (!result.Success)
         {
             AddAgentAudit("apply_plan", plan.Summary, false, result.ErrorMessage ?? "Edit plan failed");
             return new { ok = false, planId = plan.PlanId, error = result.ErrorMessage ?? "Edit plan failed" };
         }
 
-        var appliedRevision = _project.IncrementRevision();
-        _project.AgentEditPlans.Add(new AgentEditPlanRecord
-        {
-            PlanId = plan.PlanId,
-            Summary = plan.Summary,
-            BaseRevision = baseRevision.Value,
-            AppliedRevision = appliedRevision,
-            Status = AgentEditPlanStatus.Applied,
-            AppliedUtc = DateTimeOffset.UtcNow,
-            Operations = { },
-        });
-        var record = _project.AgentEditPlans[^1];
-        record.Operations.AddRange(plan.Operations);
-        record.AffectedRanges.AddRange(plan.AffectedRanges);
-        record.Warnings.AddRange(plan.Warnings);
-        AdvanceWorkflowAfterAgentPlan(record);
+        _project.IncrementRevision();
 
         _timelinePreviewDirty = true;
         if (_timeline != null) _timeline.ProjectRevision = _project.Revision;
@@ -3052,25 +3424,13 @@ public partial class MainWindow : Window
             revision = _project.Revision,
             operations = plan.Operations,
             affectedRanges = plan.AffectedRanges,
+            creativePlan = plan.CreativePlan,
+            qualityScores = plan.QualityScores,
+            qualityIssues = plan.QualityIssues,
+            prompt = new { id = plan.PromptId, version = plan.PromptVersion },
             warnings = plan.Warnings,
             timeline = BuildAgentTimelineState(),
         };
-    }
-
-    private void AdvanceWorkflowAfterAgentPlan(AgentEditPlanRecord record)
-    {
-        _project.Workflow.EnsureDefaults();
-        var stage = _project.Workflow.Stages.FirstOrDefault(value => value.Id == "agent_draft");
-        if (stage == null) return;
-        stage.Status = ProductionStageStatus.AwaitingApproval;
-        stage.StartedUtc ??= record.CreatedUtc;
-        stage.Summary = record.Summary;
-        stage.Revision++;
-        stage.Outputs.Clear();
-        stage.Outputs.Add($"edit-plan:{record.PlanId}");
-        stage.Warnings.Clear();
-        stage.Warnings.AddRange(record.Warnings);
-        _project.Workflow.ActiveStageId = "agent_draft";
     }
 
     private object BuildAgentTimelineState()
@@ -3086,6 +3446,17 @@ public partial class MainWindow : Window
             revision = _project.Revision,
             modifiedUtc = _project.ModifiedUtc,
             projectPath = _currentProjectPath,
+            campaignDescription = _project.CampaignDescription,
+            editingBrief = _project.EditingBrief,
+            editingStyleProfiles = EditingStyleProfile.BuiltIns,
+            timelineQuality = TimelineQualityAnalyzer.Analyze(_project, sequence),
+            tasks = _project.Tasks.Select(task => new
+            {
+                id = task.Id,
+                title = task.Title,
+                completed = task.IsCompleted,
+            }),
+            artifactHealth = ProjectArtifactHealthService.Inspect(_project),
             sequence = new
             {
                 id = sequence.Id.ToString(),
@@ -3103,6 +3474,7 @@ public partial class MainWindow : Window
                     muted = track.Muted,
                     solo = track.Solo,
                     locked = track.Locked,
+                    hidden = track.Hidden,
                     items = track.Items
                         .OrderBy(item => item.TimelineStart.Seconds)
                         .Select(item => new
@@ -3118,6 +3490,21 @@ public partial class MainWindow : Window
                             end = item.TimelineEnd.Seconds,
                             sourceStart = item.SourceStart.Seconds,
                             sourceDuration = item.SourceDuration.Seconds,
+                            speed = item.Speed,
+                            reversed = item.Reversed,
+                            locked = item.Locked,
+                            opacity = item.Opacity,
+                            volume = item.Volume,
+                            muted = item.Muted,
+                            pan = item.Pan,
+                            blendMode = item.BlendMode,
+                            transform = item.Transform,
+                            crop = new { left = item.CropLeft, top = item.CropTop, right = item.CropRight, bottom = item.CropBottom },
+                            colorCorrection = item.ColorCorrection,
+                            speedCurve = item.SpeedCurve,
+                            stabilization = item.Stabilization,
+                            chromaKey = item.ChromaKey,
+                            masks = item.Masks,
                             text = item.TextContent,
                             animations = item.AnimationChannels.Select(channel => new
                             {
@@ -3170,7 +3557,6 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(action))
             return new { ok = false, error = "Missing action" };
 
-        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", true);
         var previewOnly = AgentPayloadReader.ReadBool(payload, "preview_only", false);
         var baseRevision = AgentPayloadReader.ReadLong(payload, "base_revision");
         if (!previewOnly && baseRevision != _project.Revision)
@@ -3199,7 +3585,7 @@ public partial class MainWindow : Window
         if (previewOnly)
             return new { ok = true, preview = true, summary = edit.Summary, action };
 
-        if (requireApproval && !ConfirmAgentEdit(edit.Summary))
+        if (!ConfirmAgentEdit(edit.Summary))
         {
             AddAgentAudit(action, edit.Summary, false, "User rejected edit");
             return new { ok = false, rejected = true, error = "User rejected edit" };
@@ -3224,11 +3610,17 @@ public partial class MainWindow : Window
         return new { ok = true, applied = true, summary = edit.Summary, revision = _project.Revision, timeline = BuildAgentTimelineState() };
     }
 
-    private async Task<object> RenderAgentTimelineAsync(JsonElement payload, CancellationToken cancellationToken)
+    private async Task<object> RenderAgentTimelineAsync(
+        JsonElement payload,
+        CancellationToken cancellationToken,
+        bool approvalAlreadyGranted = false)
     {
         var sequence = _project.MainSequence;
         if (sequence == null)
             return new { ok = false, error = "No active sequence" };
+        var soundLicenseIssues = SoundLicenseGuard.FindIssues(_project, sequence);
+        if (soundLicenseIssues.Count > 0)
+            return new { ok = false, error = SoundLicenseGuard.FormatBlockingMessage(soundLicenseIssues), soundLicenseIssues };
 
         var requestedOutputPath = AgentPayloadReader.ReadString(payload, "output_path");
         if (string.IsNullOrWhiteSpace(requestedOutputPath))
@@ -3261,9 +3653,8 @@ public partial class MainWindow : Window
             };
         }
 
-        var requireApproval = AgentPayloadReader.ReadBool(payload, "require_approval", true);
         var summary = $"Render timeline to {outputPath}";
-        if (requireApproval && !ConfirmAgentEdit(summary))
+        if (!approvalAlreadyGranted && !ConfirmAgentEdit(summary))
         {
             AddAgentAudit("render_timeline", summary, false, "User rejected render");
             return new { ok = false, rejected = true, error = "User rejected render" };
@@ -3287,6 +3678,16 @@ public partial class MainWindow : Window
             quality,
             IncludeAudio: AgentPayloadReader.ReadBool(payload, "include_audio", true),
             HardwareEncoding: AgentPayloadReader.ReadBool(payload, "hardware_encoding", false));
+        var projectContext = CaptureProjectOperationContext();
+        var renderProject = ProjectSerializer.CreateSnapshot(_project);
+        var renderSequence = renderProject.Sequences.FirstOrDefault(candidate => candidate.Id == sequence.Id)
+                             ?? throw new InvalidOperationException("The active sequence was not present in the render snapshot.");
+        VariantRenderContextService.CenterPrimaryVideoForPortrait(
+            renderSequence,
+            sequence.Width,
+            sequence.Height,
+            width,
+            height);
         var renderJob = StartAgentRenderJob(
             payload,
             RenderJobKind.Timeline,
@@ -3302,23 +3703,27 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             await _mediaService.ExportTimelineAsync(
-                _project,
-                sequence,
+                renderProject,
+                renderSequence,
                 outputPath,
                 cancellationToken: cancellationToken,
                 outputWidth: width,
                 outputHeight: height,
                 exportOptions: options);
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; render state was not committed." };
             SetAgentRenderJobVerifying(renderJob);
             var receipt = await _renderReceiptService.CreateAsync(
-                _project,
-                sequence,
+                renderProject,
+                renderSequence,
                 outputPath,
                 width,
                 height,
                 options,
                 approvalSource: "agent-timeline-render",
                 cancellationToken: cancellationToken);
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; render receipt was not committed." };
             CompleteAgentRenderJob(renderJob, receipt);
             var passed = receipt.Status != RenderVerificationStatus.Failed;
             AddAgentAudit("render_timeline", summary, passed, passed ? null : "Render verification failed");
@@ -3329,12 +3734,17 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            FailAgentRenderJob(renderJob, "Render was canceled", canceled: true);
-            AddAgentAudit("render_timeline", summary, false, "Render was canceled");
+            if (IsCurrentProjectOperation(projectContext))
+            {
+                FailAgentRenderJob(renderJob, "Render was canceled", canceled: true);
+                AddAgentAudit("render_timeline", summary, false, "Render was canceled");
+            }
             throw;
         }
         catch (Exception ex)
         {
+            if (!IsCurrentProjectOperation(projectContext))
+                return new { ok = false, conflict = true, error = "The originating project is no longer open; failed render state was not committed." };
             FailAgentRenderJob(renderJob, ex.Message);
             AddAgentAudit("render_timeline", summary, false, ex.Message);
             return new { ok = false, revision = _project.Revision, renderJob, error = ex.Message };
@@ -3391,12 +3801,16 @@ public partial class MainWindow : Window
             Text = Math.Clamp(_settings.MaxAiInputSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture),
             Width = 92,
         };
-        var geminiKeyBox = new PasswordBox
-        {
-            Password = SecretProtectionService.Unprotect(_settings.ProtectedGeminiApiKey),
-            MinHeight = 34,
-            Margin = new Thickness(0, 7, 0, 0),
-        };
+        var groqKeyEditor = new ApiKeyListEditor(
+            (_settings.ProtectedGroqApiKeys ?? [])
+                .Select(SecretProtectionService.Unprotect)
+                .Where(value => !string.IsNullOrWhiteSpace(value)),
+            "Add Groq key");
+        var cloudflareCredentialEditor = new CloudflareCredentialListEditor(
+            (_settings.ProtectedCloudflareCredentials ?? [])
+                .Select(value => new CloudflareCredentialInput(
+                    SecretProtectionService.Unprotect(value.ProtectedAccountId),
+                    SecretProtectionService.Unprotect(value.ProtectedApiToken))));
         var zoomSlider = new Slider
         {
             Minimum = ZoomSlider.Minimum,
@@ -3601,17 +4015,32 @@ public partial class MainWindow : Window
         });
         panel.Children.Add(new TextBlock
         {
-            Text = "Gemini API key",
+            Text = "GroqCloud API keys",
             Foreground = (Brush)FindResource("TextSecondaryBrush"),
         });
-        panel.Children.Add(geminiKeyBox);
+        panel.Children.Add(groqKeyEditor);
         panel.Children.Add(new TextBlock
         {
-            Text = "Stored encrypted for your current Windows account. Leave blank to use only local models.",
+            Text = "Cloudflare Workers AI credentials",
+            Foreground = (Brush)FindResource("TextSecondaryBrush"),
+            Margin = new Thickness(0, 14, 0, 0),
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Each row is one account ID and API token pair.",
             Foreground = (Brush)FindResource("TextMutedBrush"),
             FontSize = 10,
             TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 6, 0, 0),
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        panel.Children.Add(cloudflareCredentialEditor);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Credentials are stored encrypted for your current Windows account. Rushframe keeps one credential fixed per provider during the app session, then rotates to the next credential the next session that provider is used.",
+            Foreground = (Brush)FindResource("TextMutedBrush"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
         });
         var panelScroller = new ScrollViewer
         {
@@ -3639,6 +4068,17 @@ public partial class MainWindow : Window
             if (!int.TryParse(previewWidthBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var previewWidth))
                 previewWidth = _settings.PreviewMaxWidth;
 
+            IReadOnlyList<CloudflareCredentialInput> cloudflareCredentials;
+            try
+            {
+                cloudflareCredentials = cloudflareCredentialEditor.GetValues();
+            }
+            catch (InvalidOperationException ex)
+            {
+                MessageBox.Show(dialog, ex.Message, "Invalid Cloudflare Credentials", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             _settings = new EditorSettings
             {
                 SnapEnabled = snapToggle.IsChecked ?? true,
@@ -3652,7 +4092,19 @@ public partial class MainWindow : Window
                 AutosaveIntervalSeconds = Math.Clamp(interval, 5, 3600),
                 StartIntelligenceBackend = backendToggle.IsChecked ?? true,
                 IntelligenceBackendPort = _settings.IntelligenceBackendPort,
-                ProtectedGeminiApiKey = SecretProtectionService.Protect(geminiKeyBox.Password),
+                ProtectedGroqApiKeys = groqKeyEditor.GetValues()
+                    .Select(SecretProtectionService.Protect)
+                    .ToList(),
+                ProtectedCloudflareCredentials = cloudflareCredentials
+                    .Select(value => new ProtectedCloudflareCredential
+                    {
+                        ProtectedAccountId = SecretProtectionService.Protect(value.AccountId),
+                        ProtectedApiToken = SecretProtectionService.Protect(value.ApiToken),
+                    })
+                    .ToList(),
+                AiProviderRotationCursors = new Dictionary<string, int>(
+                    _settings.AiProviderRotationCursors ?? [],
+                    StringComparer.OrdinalIgnoreCase),
                 MaxAiInputSeconds = Math.Clamp(aiInputSeconds, 30, 1800),
                 MaxOutputDurationSeconds = 180,
                 Keybindings = new Dictionary<string, string>(_settings.Keybindings),
@@ -3684,14 +4136,15 @@ public partial class MainWindow : Window
         var text = PromptForTextClip();
         if (string.IsNullOrWhiteSpace(text)) return;
 
+        var commands = new List<IEditCommand>();
         var track = seq.Tracks.FirstOrDefault(t => t.Kind == TrackKind.Text && !t.Locked);
         if (track == null)
         {
             track = new Track { Kind = TrackKind.Text, Name = "T1", Order = seq.Tracks.Count };
-            seq.Tracks.Add(track);
+            commands.Add(new AddPreparedTrackCommand { Track = track });
         }
 
-        Execute(new AddClipCommand
+        commands.Add(new AddClipCommand
         {
             TrackId = track.Id,
             Item = new TimelineItem
@@ -3706,6 +4159,7 @@ public partial class MainWindow : Window
                 Transform = { PositionX = 80, PositionY = 120 },
             },
         });
+        Execute(new CompositeEditCommand("Add text clip", commands));
     }
 
     private string? PromptForTextClip()
@@ -3852,7 +4306,14 @@ public partial class MainWindow : Window
                 progress,
                 AddRenderQueueMessage,
                 message => StatusText.Text = message,
-                MarkProjectDirty);
+                receipt =>
+                {
+                    using var mutation = _saveCoordinator.BeginMutation();
+                    RenderReceiptService.ApplyToProject(_project, receipt);
+                    _project.IncrementRevision();
+                    MarkProjectDirty("Render receipt and QA results added");
+                    RefreshVariantsAndReceipts();
+                });
         }
         catch (OperationCanceledException)
         {
@@ -3948,7 +4409,7 @@ public partial class MainWindow : Window
         if (_groupClipboard is { Count: > 0 })
         {
             var groupPasteStart = _timeline.PlayheadTime;
-            var commands = new List<IEditCommand>();
+            var pasteTargets = new List<(GroupClipboardItem ClipboardItem, Track TargetTrack)>();
             foreach (var clipboardItem in _groupClipboard)
             {
                 var groupTargetTrack = clipboardItem.TrackIndex >= 0 && clipboardItem.TrackIndex < seq.Tracks.Count
@@ -3957,18 +4418,22 @@ public partial class MainWindow : Window
                         ? seq.Tracks[clipboardItem.TrackIndex]
                         : seq.Tracks.FirstOrDefault(track =>
                             !track.Locked && TrackCompatibility.IsItemCompatibleWithTrack(clipboardItem.Item.Kind, track.Kind));
-                if (groupTargetTrack == null) continue;
-
-                commands.Add(new AddClipCommand
+                if (groupTargetTrack == null)
                 {
-                    TrackId = groupTargetTrack.Id,
-                    Item = TimelineItemCloner.Clone(
-                        clipboardItem.Item,
-                        groupPasteStart.Add(clipboardItem.RelativeStart)),
-                });
+                    StatusText.Text = "Group paste canceled: no compatible unlocked destination exists for every item";
+                    return;
+                }
+                pasteTargets.Add((clipboardItem, groupTargetTrack));
             }
-            if (commands.Count > 0)
-                Execute(new CompositeEditCommand($"Paste {commands.Count} clips", commands));
+
+            var commands = pasteTargets.Select(target => (IEditCommand)new AddClipCommand
+            {
+                TrackId = target.TargetTrack.Id,
+                Item = TimelineItemCloner.Clone(
+                    target.ClipboardItem.Item,
+                    groupPasteStart.Add(target.ClipboardItem.RelativeStart)),
+            }).ToList();
+            Execute(new CompositeEditCommand($"Paste {commands.Count} clips", commands));
             return;
         }
 
@@ -3976,9 +4441,12 @@ public partial class MainWindow : Window
         var preferredIndex = _timeline.SelectedTrackIndex >= 0
             ? _timeline.SelectedTrackIndex
             : _lastSelectedTrackIndex;
-        var targetTrack = preferredIndex >= 0 && preferredIndex < seq.Tracks.Count && !seq.Tracks[preferredIndex].Locked
-            ? seq.Tracks[preferredIndex]
-            : seq.Tracks.FirstOrDefault(track => !track.Locked);
+        var targetTrack = preferredIndex >= 0 && preferredIndex < seq.Tracks.Count
+            && !seq.Tracks[preferredIndex].Locked
+            && TrackCompatibility.IsItemCompatibleWithTrack(_clipboard.Clipboard.Kind, seq.Tracks[preferredIndex].Kind)
+                ? seq.Tracks[preferredIndex]
+                : seq.Tracks.FirstOrDefault(track =>
+                    !track.Locked && TrackCompatibility.IsItemCompatibleWithTrack(_clipboard.Clipboard.Kind, track.Kind));
         if (targetTrack == null) return;
 
         var pasteStart = _timeline.PlayheadTime;
@@ -4334,11 +4802,23 @@ public partial class MainWindow : Window
         });
     }
 
-    private void AddSelectedMediaToTimeline()
+    private async Task AddSelectedMediaToTimelineAsync()
     {
         if (MediaList.SelectedItem is not MediaListItem selected) return;
         var seq = _project.MainSequence;
         if (seq == null || _timeline == null) return;
+
+        if (selected.Asset.Kind == MediaKind.Font)
+        {
+            StatusText.Text = "Font is registered. Select a text clip and choose it in Inspector > Properties.";
+            await EnsureFontsLoadedAsync();
+            return;
+        }
+        if (selected.Asset.Kind == MediaKind.Subtitle)
+        {
+            await AddSubtitleAssetToTimelineAsync(selected.Asset, seq);
+            return;
+        }
 
         var trackKind = selected.Asset.Kind switch
         {
@@ -4348,18 +4828,19 @@ public partial class MainWindow : Window
         };
         var itemKind = selected.Asset.Kind == MediaKind.Image ? ItemKind.Image : ItemKind.Clip;
 
+        var commands = new List<IEditCommand>();
         var track = seq.Tracks.FirstOrDefault(t => t.Kind == trackKind && !t.Locked);
         if (track == null)
         {
             track = new Track { Kind = trackKind, Name = trackKind == TrackKind.Audio ? "A1" : trackKind == TrackKind.Overlay ? "O1" : "V1", Order = seq.Tracks.Count };
-            seq.Tracks.Add(track);
+            commands.Add(new AddPreparedTrackCommand { Track = track });
         }
 
         var duration = selected.Asset.Duration.Seconds > 0
             ? selected.Asset.Duration
             : MediaTime.FromSeconds(selected.Asset.Kind == MediaKind.Image ? 5 : 10);
 
-        Execute(new AddClipCommand
+        commands.Add(new AddClipCommand
         {
             TrackId = track.Id,
             Item = new TimelineItem
@@ -4371,8 +4852,74 @@ public partial class MainWindow : Window
                 SourceDuration = duration,
             },
         });
+        Execute(new CompositeEditCommand("Add media to timeline", commands));
         StatusText.Text = $"Added {Path.GetFileName(selected.Asset.OriginalPath)} to {track.Name} at {FormatPreviewTime(TimeSpan.FromSeconds(_timeline.PlayheadTime.Seconds))}";
         PreviewAsset(selected.Asset);
+    }
+
+    private async Task AddSubtitleAssetToTimelineAsync(MediaAsset asset, Sequence sequence)
+    {
+        if (!File.Exists(asset.OriginalPath))
+        {
+            StatusText.Text = "Subtitle file is offline";
+            return;
+        }
+
+        IReadOnlyList<SubtitleCue> cues;
+        try
+        {
+            cues = await SubtitleParser.ParseAsync(asset.OriginalPath);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Subtitle import failed: {ex.Message}";
+            return;
+        }
+        if (cues.Count == 0)
+        {
+            StatusText.Text = "Subtitle file contains no valid cues";
+            return;
+        }
+
+        var commands = new List<IEditCommand>();
+        var track = sequence.Tracks.FirstOrDefault(candidate => candidate.Kind == TrackKind.Text && !candidate.Locked);
+        if (track == null)
+        {
+            track = new Track { Kind = TrackKind.Text, Name = "Subtitles", Order = sequence.Tracks.Count };
+            commands.Add(new AddPreparedTrackCommand { Track = track });
+        }
+        var baseTime = _timeline?.PlayheadTime ?? MediaTime.Zero;
+        foreach (var cue in cues)
+        {
+            commands.Add(new AddClipCommand
+            {
+                TrackId = track.Id,
+                Item = new TimelineItem
+                {
+                    Kind = ItemKind.Text,
+                    MediaAssetId = asset.Id,
+                    TimelineStart = baseTime.Add(cue.Start),
+                    Duration = cue.End.Subtract(cue.Start),
+                    SourceStart = cue.Start,
+                    SourceDuration = cue.End.Subtract(cue.Start),
+                    TextContent = cue.Text,
+                    FontSize = 48,
+                    FontBold = true,
+                    FontAlign = "center",
+                    FillColor = "#FFFFFF",
+                    OutlineColor = "#000000",
+                    OutlineWidth = 4,
+                    ShadowColor = "#000000",
+                    ShadowOffsetX = 3,
+                    ShadowOffsetY = 4,
+                    ShadowOpacity = 0.75,
+                    Transform = { PositionX = 80, PositionY = Math.Max(80, sequence.Height - 260) },
+                },
+            });
+        }
+
+        if (Execute(new CompositeEditCommand($"Import {cues.Count} subtitle cues", commands)))
+            StatusText.Text = $"Imported {cues.Count} subtitle cues from {Path.GetFileName(asset.OriginalPath)}";
     }
 
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
@@ -4381,7 +4928,7 @@ public partial class MainWindow : Window
 
     private static MediaKind GetMediaKind(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
-        ".mp3" or ".wav" or ".aac" or ".m4a" or ".flac" => MediaKind.Audio,
+        ".mp3" or ".wav" or ".aac" or ".m4a" or ".flac" or ".ogg" or ".oga" or ".opus" or ".wma" or ".aif" or ".aiff" or ".ac3" or ".amr" or ".caf" => MediaKind.Audio,
         ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" => MediaKind.Image,
         ".srt" or ".vtt" => MediaKind.Subtitle,
         ".ttf" or ".otf" => MediaKind.Font,

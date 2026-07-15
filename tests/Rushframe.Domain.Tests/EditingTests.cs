@@ -591,10 +591,28 @@ public class EditingTests
         Assert.Equal(left.Id, transition.LeftItemId);
         Assert.Equal(right.Id, transition.RightItemId);
         Assert.Equal(TransitionKind.CrossDissolve, transition.Kind);
+        Assert.Equal(TransitionAudioMode.None, transition.AudioMode);
 
         var undo = cmd.Undo(seq);
 
         Assert.True(undo.Success);
+        Assert.Empty(seq.Transitions);
+    }
+
+    [Fact]
+    public void ApplyTransitionCommand_rejects_audio_track_pair()
+    {
+        var seq = new Sequence();
+        var track = new Track { Kind = TrackKind.Audio };
+        var left = new TimelineItem { Kind = ItemKind.Clip, TimelineStart = MediaTime.Zero, Duration = MediaTime.FromSeconds(2) };
+        var right = new TimelineItem { Kind = ItemKind.Clip, TimelineStart = MediaTime.FromSeconds(2), Duration = MediaTime.FromSeconds(2) };
+        track.Items.AddRange([left, right]);
+        seq.Tracks.Add(track);
+
+        var result = new ApplyTransitionCommand { LeftItemId = left.Id, RightItemId = right.Id }.Execute(seq);
+
+        Assert.False(result.Success);
+        Assert.Contains("video or overlay", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(seq.Transitions);
     }
 

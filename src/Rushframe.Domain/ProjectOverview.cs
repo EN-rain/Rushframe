@@ -319,8 +319,6 @@ public static class ProjectOverviewBuilder
                 overview.ReviewHints.Add($"Workflow/{stage.Name}: completed without a recorded approval.");
             foreach (var warning in stage.Warnings)
                 overview.ReviewHints.Add($"Workflow/{stage.Name}: {warning}");
-            foreach (var artifact in stage.ArtifactPaths.Where(path => !string.IsNullOrWhiteSpace(path) && !File.Exists(path)))
-                overview.ReviewHints.Add($"Workflow/{stage.Name}: artifact is missing: {Path.GetFileName(artifact)}.");
         }
 
         if (project.Workflow.BudgetLimitUsd.HasValue
@@ -385,10 +383,7 @@ public static class ProjectOverviewBuilder
             });
             if (variant.Status == ExportVariantStatus.Failed)
                 overview.ReviewHints.Add($"Variant/{variant.Name}: the most recent render failed.");
-            if (!string.IsNullOrWhiteSpace(variant.LastOutputPath) && !File.Exists(variant.LastOutputPath))
-                overview.ReviewHints.Add($"Variant/{variant.Name}: last output is missing: {Path.GetFileName(variant.LastOutputPath)}.");
-            if (!string.IsNullOrWhiteSpace(variant.LastReceiptPath) && !File.Exists(variant.LastReceiptPath))
-                overview.ReviewHints.Add($"Variant/{variant.Name}: render receipt is missing: {Path.GetFileName(variant.LastReceiptPath)}.");
+
         }
 
         foreach (var composition in project.ExternalCompositions)
@@ -408,9 +403,7 @@ public static class ProjectOverviewBuilder
             });
             if (composition.Status is ExternalCompositionStatus.Failed or ExternalCompositionStatus.Offline)
                 overview.ReviewHints.Add($"Composition/{composition.Name}: {composition.Status}. {composition.LastError}".Trim());
-            if (composition.Status == ExternalCompositionStatus.Rendered
-                && (string.IsNullOrWhiteSpace(composition.OutputPath) || !File.Exists(composition.OutputPath)))
-                overview.ReviewHints.Add($"Composition/{composition.Name}: rendered output is missing.");
+
         }
 
         foreach (var plan in project.AgentEditPlans.TakeLast(50))
@@ -470,10 +463,7 @@ public static class ProjectOverviewBuilder
             });
             if (receipt.VerificationStatus == RenderVerificationStatus.Failed)
                 overview.ReviewHints.Add($"Render receipt/{receipt.ReceiptId}: export verification failed for {Path.GetFileName(receipt.OutputPath)}.");
-            if (!File.Exists(receipt.OutputPath))
-                overview.ReviewHints.Add($"Render receipt/{receipt.ReceiptId}: output file is missing: {Path.GetFileName(receipt.OutputPath)}.");
-            if (!File.Exists(receipt.ReceiptPath))
-                overview.ReviewHints.Add($"Render receipt/{receipt.ReceiptId}: receipt file is missing.");
+
         }
 
         foreach (var analysis in project.MediaIntelligence)

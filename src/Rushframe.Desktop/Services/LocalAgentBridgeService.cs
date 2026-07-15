@@ -1,18 +1,23 @@
+using System.Collections.Concurrent;
+using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.IO;
 
 namespace Rushframe.Desktop.Services;
 
 public sealed class LocalAgentBridgeService : IDisposable
 {
     private const long MaxRequestBytes = 1_048_576;
+    private const int MaxConcurrentRequests = 8;
     private readonly HttpListener _listener = new();
     private readonly Func<string, JsonElement?, CancellationToken, Task<object>> _handler;
+    private readonly SemaphoreSlim _requestGate = new(MaxConcurrentRequests, MaxConcurrentRequests);
+    private readonly ConcurrentDictionary<long, Task> _inflightRequests = new();
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
+    private long _nextRequestId;
 
     public int Port { get; }
     public Uri BaseUri => new($"http://127.0.0.1:{Port}/");
@@ -39,18 +44,37 @@ public sealed class LocalAgentBridgeService : IDisposable
 
     public void Stop()
     {
-        _cts?.Cancel();
+        var cancellation = _cts;
+        cancellation?.Cancel();
         if (_listener.IsListening)
             _listener.Stop();
-        _cts?.Dispose();
+
+        WaitForTask(_loopTask, TimeSpan.FromSeconds(2));
+        var requests = _inflightRequests.Values.ToArray();
+        if (requests.Length > 0)
+        {
+            try
+            {
+                Task.WhenAll(requests).Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException)
+            {
+                // Individual request failures have already been translated to responses.
+            }
+        }
+
+        cancellation?.Dispose();
         _cts = null;
+        _loopTask = null;
     }
 
     public void Dispose()
     {
         Stop();
         _listener.Close();
-        _cts?.Dispose();
+        // A handler that ignores cancellation may finish after the bounded shutdown wait.
+        // SemaphoreSlim owns no unmanaged resource, so leaving it undisposed avoids a late
+        // Release() fault without allowing new requests after the listener is closed.
     }
 
     private async Task ListenAsync(CancellationToken cancellationToken)
@@ -71,7 +95,40 @@ public sealed class LocalAgentBridgeService : IDisposable
                 break;
             }
 
-            _ = Task.Run(() => HandleAsync(context, cancellationToken), cancellationToken);
+            try
+            {
+                await _requestGate.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                context.Response.Abort();
+                break;
+            }
+
+            var requestId = Interlocked.Increment(ref _nextRequestId);
+            var task = Task.Run(() => HandleTrackedAsync(context, cancellationToken));
+            _inflightRequests[requestId] = task;
+            _ = task.ContinueWith(
+                completedTask =>
+                {
+                    _inflightRequests.TryRemove(requestId, out _);
+                    _ = completedTask.Exception;
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+    }
+
+    private async Task HandleTrackedAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HandleAsync(context, cancellationToken);
+        }
+        finally
+        {
+            _requestGate.Release();
         }
     }
 
@@ -101,8 +158,7 @@ public sealed class LocalAgentBridgeService : IDisposable
             JsonElement? payload = null;
             if (context.Request.HasEntityBody)
             {
-                using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding);
-                var body = await reader.ReadToEndAsync(cancellationToken);
+                var body = await ReadBoundedBodyAsync(context.Request, cancellationToken);
                 if (!string.IsNullOrWhiteSpace(body))
                 {
                     using var document = JsonDocument.Parse(body);
@@ -113,10 +169,41 @@ public sealed class LocalAgentBridgeService : IDisposable
             var result = await _handler(path, payload, cancellationToken);
             await WriteJsonAsync(context.Response, result, HttpStatusCode.OK, cancellationToken);
         }
+        catch (RequestTooLargeException)
+        {
+            await TryWriteJsonAsync(context.Response, new { ok = false, error = "request too large" }, HttpStatusCode.RequestEntityTooLarge, cancellationToken);
+        }
+        catch (JsonException ex)
+        {
+            await TryWriteJsonAsync(context.Response, new { ok = false, error = ex.Message }, HttpStatusCode.BadRequest, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            context.Response.Abort();
+        }
         catch (Exception ex)
         {
-            await WriteJsonAsync(context.Response, new { ok = false, error = ex.Message }, HttpStatusCode.BadRequest, cancellationToken);
+            await TryWriteJsonAsync(context.Response, new { ok = false, error = ex.Message }, HttpStatusCode.BadRequest, cancellationToken);
         }
+    }
+
+    private static async Task<string> ReadBoundedBodyAsync(
+        HttpListenerRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var body = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await request.InputStream.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (read == 0) break;
+            if (body.Length + read > MaxRequestBytes)
+                throw new RequestTooLargeException();
+            await body.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+
+        if (body.Length == 0) return string.Empty;
+        return request.ContentEncoding.GetString(body.GetBuffer(), 0, checked((int)body.Length));
     }
 
     private bool IsAuthorized(HttpListenerRequest request)
@@ -136,6 +223,27 @@ public sealed class LocalAgentBridgeService : IDisposable
                && CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes);
     }
 
+    private static async Task TryWriteJsonAsync(
+        HttpListenerResponse response,
+        object value,
+        HttpStatusCode status,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await WriteJsonAsync(response, value, status, cancellationToken);
+        }
+        catch (HttpListenerException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private static async Task WriteJsonAsync(
         HttpListenerResponse response,
         object value,
@@ -153,4 +261,18 @@ public sealed class LocalAgentBridgeService : IDisposable
         await response.OutputStream.WriteAsync(bytes, cancellationToken);
         response.OutputStream.Close();
     }
+
+    private static void WaitForTask(Task? task, TimeSpan timeout)
+    {
+        if (task == null) return;
+        try
+        {
+            task.Wait(timeout);
+        }
+        catch (AggregateException)
+        {
+        }
+    }
+
+    private sealed class RequestTooLargeException : Exception;
 }

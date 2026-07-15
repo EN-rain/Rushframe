@@ -81,7 +81,7 @@ public sealed class ProjectOverviewTests
     }
 
     [Fact]
-    public void Serialize_refreshes_overview_after_edit_changes()
+    public void Serialize_refreshes_snapshot_overview_without_mutating_live_project()
     {
         var project = new Project();
         var track = new Track { Kind = TrackKind.Video, Name = "V1" };
@@ -94,14 +94,16 @@ public sealed class ProjectOverviewTests
         track.Items.Add(item);
         project.MainSequence!.Tracks.Add(track);
 
-        ProjectSerializer.Serialize(project);
+        var initialSnapshot = ProjectSerializer.Deserialize(ProjectSerializer.Serialize(project));
+        Assert.Empty(initialSnapshot.Overview.EffectTypes);
         Assert.Empty(project.Overview.EffectTypes);
 
         item.Effects.Add(new EffectInstance { EffectTypeId = "filmGrain" });
-        ProjectSerializer.Serialize(project);
+        var updatedSnapshot = ProjectSerializer.Deserialize(ProjectSerializer.Serialize(project));
 
-        Assert.Contains("filmGrain", project.Overview.EffectTypes);
-        Assert.Contains(project.Overview.ModifierSummary, summary =>
+        Assert.Empty(project.Overview.EffectTypes);
+        Assert.Contains("filmGrain", updatedSnapshot.Overview.EffectTypes);
+        Assert.Contains(updatedSnapshot.Overview.ModifierSummary, summary =>
             summary.Modifier == "effects" && summary.ItemCount == 1);
     }
 }

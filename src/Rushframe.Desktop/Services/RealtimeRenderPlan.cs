@@ -55,9 +55,10 @@ public sealed class RealtimeRenderPlan
 
         var visuals = new List<VisualEntry>();
         var audio = new List<AudioEntry>();
-        foreach (var track in sequence.Tracks.OrderBy(track => track.Order))
+        var hasSoloTracks = sequence.Tracks.Any(track => track.Solo && !track.Hidden);
+        foreach (var track in sequence.Tracks)
         {
-            if (track.Hidden) continue;
+            if (track.Hidden || hasSoloTracks && !track.Solo) continue;
             foreach (var item in track.Items)
             {
                 incomingByItem.TryGetValue(item.Id, out var incoming);
@@ -90,8 +91,8 @@ public sealed class RealtimeRenderPlan
         return new RealtimeRenderPlan(
             project.Revision,
             sequence,
-            visuals.OrderBy(entry => entry.ActiveStart).ThenBy(entry => entry.Track.Order).ToArray(),
-            audio.OrderBy(entry => entry.ActiveStart).ThenBy(entry => entry.Track.Order).ToArray(),
+            visuals.OrderBy(entry => entry.ActiveStart).ThenBy(entry => sequence.Tracks.IndexOf(entry.Track)).ToArray(),
+            audio.OrderBy(entry => entry.ActiveStart).ThenBy(entry => sequence.Tracks.IndexOf(entry.Track)).ToArray(),
             mediaById,
             itemStartById,
             ComputeMaxConcurrency(mediaIntervals));
@@ -135,6 +136,8 @@ public sealed class RealtimeRenderPlan
             }
         }
 
+        ApplyItemTransitionPresentation(item, timelineSeconds, ref active, ref opacity, ref offsetX, ref offsetY, ref scale);
+
         if (entry.Outgoing is { } outgoing)
         {
             var cut = _itemStartById.TryGetValue(outgoing.RightItemId, out var rightStart)
@@ -157,6 +160,59 @@ public sealed class RealtimeRenderPlan
         }
 
         return new RealtimePresentation(active, opacity, offsetX, offsetY, scale);
+    }
+
+    private void ApplyItemTransitionPresentation(
+        TimelineItem item,
+        double timelineSeconds,
+        ref bool active,
+        ref double opacity,
+        ref double offsetX,
+        ref double offsetY,
+        ref double scale)
+    {
+        var local = timelineSeconds - item.TimelineStart.Seconds;
+        if (item.VisualTransitionIn != ItemTransitionKind.None && item.VisualTransitionInDuration.Seconds > 0 && local >= 0 && local <= item.VisualTransitionInDuration.Seconds)
+        {
+            active = true;
+            var progress = Math.Clamp(local / item.VisualTransitionInDuration.Seconds, 0, 1);
+            ApplyItemTransition(item.VisualTransitionIn, 1 - progress, progress, ref opacity, ref offsetX, ref offsetY, ref scale);
+        }
+        var remaining = item.Duration.Seconds - local;
+        if (item.VisualTransitionOut != ItemTransitionKind.None && item.VisualTransitionOutDuration.Seconds > 0 && remaining >= 0 && remaining <= item.VisualTransitionOutDuration.Seconds)
+        {
+            active = true;
+            var progress = Math.Clamp(remaining / item.VisualTransitionOutDuration.Seconds, 0, 1);
+            ApplyItemTransition(item.VisualTransitionOut, 1 - progress, progress, ref opacity, ref offsetX, ref offsetY, ref scale);
+        }
+    }
+
+    private void ApplyItemTransition(
+        ItemTransitionKind kind,
+        double movement,
+        double visibility,
+        ref double opacity,
+        ref double offsetX,
+        ref double offsetY,
+        ref double scale)
+    {
+        switch (kind)
+        {
+            case ItemTransitionKind.Fade: opacity *= visibility; break;
+            case ItemTransitionKind.SlideLeft: offsetX -= Sequence.Width * movement; break;
+            case ItemTransitionKind.SlideRight: offsetX += Sequence.Width * movement; break;
+            case ItemTransitionKind.SlideUp: offsetY -= Sequence.Height * movement; break;
+            case ItemTransitionKind.SlideDown: offsetY += Sequence.Height * movement; break;
+            case ItemTransitionKind.ZoomIn: scale *= 0.72 + 0.28 * visibility; opacity *= visibility; break;
+            case ItemTransitionKind.ZoomOut: scale *= 1.28 - 0.28 * visibility; opacity *= visibility; break;
+            case ItemTransitionKind.Pop: scale *= 0.68 + 0.44 * visibility - 0.12 * visibility * visibility; opacity *= visibility; break;
+            case ItemTransitionKind.SpinClockwise:
+            case ItemTransitionKind.SpinCounterClockwise:
+            case ItemTransitionKind.WipeLeft:
+            case ItemTransitionKind.WipeRight:
+                opacity *= visibility;
+                break;
+        }
     }
 
     private static (double Start, double End) GetActiveInterval(

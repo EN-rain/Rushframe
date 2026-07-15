@@ -20,10 +20,10 @@ public sealed record MediaIntelligenceRunOptions(
         if (!AnalyzeAudio) arguments.Add("--no-audio");
         if (AnalyzeVisuals)
         {
-            if (visualProvider is not ("gemini" or "qwen"))
+            if (!MediaIntelligenceUiPolicy.IsSupportedVisualProvider(visualProvider))
                 throw new ArgumentOutOfRangeException(nameof(visualProvider), visualProvider, "Unsupported visual provider.");
             arguments.Add("--visual-provider");
-            arguments.Add(visualProvider);
+            arguments.Add(MediaIntelligenceUiPolicy.NormalizeVisualProvider(visualProvider));
         }
         if (EnableOcr) arguments.Add("--ocr");
         if (TranscribeSpeech && AlignWords) arguments.Add("--alignment");
@@ -37,6 +37,12 @@ public static class MediaIntelligenceUiPolicy
 {
     public static string NormalizeWhisperModel(string? value) =>
         value?.Trim().ToLowerInvariant() is "base" or "small" or "medium" ? value.Trim().ToLowerInvariant() : "base";
+
+    public static bool IsSupportedVisualProvider(string? value) =>
+        value?.Trim().ToLowerInvariant() is "groq" or "cloudflare";
+
+    public static string NormalizeVisualProvider(string? value) =>
+        IsSupportedVisualProvider(value) ? value!.Trim().ToLowerInvariant() : "groq";
 
     public static bool CanUseTranscriptFeature(bool transcribeSpeech, bool operationRunning) =>
         transcribeSpeech && !operationRunning;

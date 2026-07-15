@@ -305,6 +305,11 @@ public sealed class AgentEditPlanRecord
     public AgentEditPlanStatus Status { get; set; } = AgentEditPlanStatus.Proposed;
     public DateTimeOffset CreatedUtc { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? AppliedUtc { get; set; }
+    public string PromptId { get; set; } = "rushframe-editing-agent";
+    public string PromptVersion { get; set; } = "1.0";
+    public AgentCreativePlan CreativePlan { get; set; } = new();
+    public AgentPlanQualityScores QualityScores { get; set; } = new();
+    public List<TimelineQualityIssue> QualityIssues { get; init; } = [];
     public List<AgentEditOperationRecord> Operations { get; init; } = [];
     public List<AgentAffectedRange> AffectedRanges { get; init; } = [];
     public List<string> Warnings { get; init; } = [];

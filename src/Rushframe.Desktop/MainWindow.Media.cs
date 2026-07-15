@@ -23,7 +23,7 @@ public partial class MainWindow
     {
         var dialog = new OpenFileDialog
         {
-            Filter = "Media Files (*.mp4;*.mov;*.avi;*.wav;*.mp3;*.png;*.jpg;*.jpeg)|*.mp4;*.mov;*.avi;*.wav;*.mp3;*.png;*.jpg;*.jpeg",
+            Filter = "Rushframe Media|*.mp4;*.mov;*.avi;*.mkv;*.webm;*.wav;*.mp3;*.aac;*.m4a;*.flac;*.ogg;*.oga;*.opus;*.wma;*.aif;*.aiff;*.ac3;*.amr;*.caf;*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.srt;*.vtt;*.ttf;*.otf|Video|*.mp4;*.mov;*.avi;*.mkv;*.webm|Audio|*.wav;*.mp3;*.aac;*.m4a;*.flac;*.ogg;*.oga;*.opus;*.wma;*.aif;*.aiff;*.ac3;*.amr;*.caf|Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp|Subtitles|*.srt;*.vtt|Fonts|*.ttf;*.otf",
             Multiselect = true,
         };
         if (dialog.ShowDialog() != true) return;
@@ -32,41 +32,57 @@ public partial class MainWindow
         try
         {
             var importedAssets = new List<MediaAsset>(dialog.FileNames.Length);
+            var failures = new List<string>();
+            var registeredPaths = _project.MediaLibrary
+                .Where(asset => !string.IsNullOrWhiteSpace(asset.OriginalPath))
+                .Select(asset => Path.GetFullPath(asset.OriginalPath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var file in dialog.FileNames)
             {
-                var duration = MediaTime.Zero;
-                var pixelWidth = 0;
-                var pixelHeight = 0;
-                try
+                var fullPath = Path.GetFullPath(file);
+                if (!registeredPaths.Add(fullPath))
                 {
-                    var probe = await _mediaService.ProbeAsync(file);
-                    duration = MediaTime.FromSeconds(probe.Duration.TotalSeconds);
-                    var videoStream = probe.Streams.FirstOrDefault(stream => stream.Kind == MediaStreamKind.Video);
-                    pixelWidth = videoStream?.Width ?? 0;
-                    pixelHeight = videoStream?.Height ?? 0;
-                }
-                catch
-                {
-                    // Keep import usable without FFmpeg; probing can be retried later.
+                    failures.Add($"{Path.GetFileName(file)}: already registered");
+                    continue;
                 }
 
-                importedAssets.Add(new MediaAsset
+                try
                 {
-                    Kind = GetMediaKind(file),
-                    OriginalPath = file,
-                    RelativeProjectPath = file,
-                    Duration = duration,
-                    PixelWidth = pixelWidth,
-                    PixelHeight = pixelHeight,
-                });
+                    var kind = GetMediaKind(file);
+                    MediaProbeResult? probe = null;
+                    if (MediaRegistrationValidator.RequiresProbe(kind))
+                        probe = await _mediaService.ProbeAsync(file);
+                    importedAssets.Add(MediaRegistrationValidator.CreateAsset(file, kind, probe));
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{Path.GetFileName(file)}: {ex.Message}");
+                }
             }
-            using (var mutation = _saveCoordinator.BeginMutation())
+
+            if (importedAssets.Count > 0)
             {
-                _project.MediaLibrary.AddRange(importedAssets);
-                _project.IncrementRevision();
+                using (var mutation = _saveCoordinator.BeginMutation())
+                {
+                    _project.MediaLibrary.AddRange(importedAssets);
+                    _project.IncrementRevision();
+                }
+                RefreshMediaList();
+                MarkProjectDirty("Media imported");
             }
-            RefreshMediaList();
-            MarkProjectDirty("Media imported");
+
+            if (failures.Count > 0)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Imported {importedAssets.Count} file(s). The following files were not registered:\n\n{string.Join("\n", failures)}",
+                    "Media Import",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            StatusText.Text = importedAssets.Count > 0
+                ? $"Imported {importedAssets.Count} media file(s)"
+                : "No media files were imported";
         }
         finally
         {
@@ -93,32 +109,53 @@ public partial class MainWindow
         }
     }
 
-    private void RelinkMedia_Executed(object sender, ExecutedRoutedEventArgs e)
+    private async void RelinkMedia_Executed(object sender, ExecutedRoutedEventArgs e)
     {
         if (MediaList.SelectedItem is not MediaListItem selected) return;
-        var dialog = new OpenFileDialog { Filter = "Media Files|*.mp4;*.mov;*.avi;*.mkv;*.webm;*.wav;*.mp3;*.aac;*.m4a;*.flac;*.png;*.jpg;*.jpeg;*.webp;*.bmp|All Files|*.*" };
+        var dialog = new OpenFileDialog { Filter = "Media Files|*.mp4;*.mov;*.avi;*.mkv;*.webm;*.wav;*.mp3;*.aac;*.m4a;*.flac;*.ogg;*.oga;*.opus;*.wma;*.aif;*.aiff;*.ac3;*.amr;*.caf;*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.srt;*.vtt;*.ttf;*.otf|All Files|*.*" };
         if (dialog.ShowDialog() != true) return;
 
-        var replacement = new MediaAsset
+        SetMediaOperationState(true, $"Validating replacement for {Path.GetFileName(selected.Asset.OriginalPath)}…");
+        try
         {
-            Id = selected.Asset.Id,
-            Kind = GetMediaKind(dialog.FileName),
-            OriginalPath = dialog.FileName,
-            RelativeProjectPath = dialog.FileName,
-            Duration = selected.Asset.Duration,
-            PixelWidth = selected.Asset.PixelWidth,
-            PixelHeight = selected.Asset.PixelHeight,
-            IsOffline = false,
-        };
-        using (var mutation = _saveCoordinator.BeginMutation())
-        {
-            var index = _project.MediaLibrary.FindIndex(a => a.Id == selected.Asset.Id);
-            if (index >= 0) _project.MediaLibrary[index] = replacement;
-            _project.IncrementRevision();
+            var kind = GetMediaKind(dialog.FileName);
+            MediaProbeResult? probe = null;
+            if (MediaRegistrationValidator.RequiresProbe(kind))
+                probe = await _mediaService.ProbeAsync(dialog.FileName);
+            var replacement = MediaRegistrationValidator.CreateAsset(
+                dialog.FileName,
+                kind,
+                probe,
+                selected.Asset.Id,
+                selected.Asset);
+            var validationError = MediaRegistrationValidator.ValidateRelink(_project, selected.Asset, replacement);
+            if (validationError != null)
+            {
+                MessageBox.Show(this, validationError, "Relink Media", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            using (var mutation = _saveCoordinator.BeginMutation())
+            {
+                var index = _project.MediaLibrary.FindIndex(asset => asset.Id == selected.Asset.Id);
+                if (index < 0) throw new InvalidOperationException("The selected media asset is no longer registered.");
+                _project.MediaLibrary[index] = replacement;
+                _project.IncrementRevision();
+            }
+            RefreshMediaList();
+            MarkProjectDirty("Media relinked");
+            AddRenderQueueMessage($"Relinked: {Path.GetFileName(dialog.FileName)}");
+            StatusText.Text = $"Relinked {Path.GetFileName(dialog.FileName)}";
         }
-        RefreshMediaList();
-        MarkProjectDirty("Media relinked");
-        AddRenderQueueMessage($"Relinked: {Path.GetFileName(dialog.FileName)}");
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Relink Media", MessageBoxButton.OK, MessageBoxImage.Error);
+            StatusText.Text = "Media relink failed";
+        }
+        finally
+        {
+            SetMediaOperationState(false);
+        }
     }
 
     private async void GenerateMediaCache_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -168,7 +205,7 @@ public partial class MainWindow
         AnalyzeScenesToggle.IsChecked = profile.AnalyzeScenes;
         AnalyzeTranscriptToggle.IsChecked = profile.TranscribeSpeech;
         AnalyzeMusicToggle.IsChecked = profile.AnalyzeAudio;
-        AnalyzeGeminiToggle.IsChecked = profile.AnalyzeVisuals;
+        AnalyzeVisualsToggle.IsChecked = profile.AnalyzeVisuals;
         AnalyzeAlignmentToggle.IsChecked = profile.AlignWords;
         AnalyzeOcrToggle.IsChecked = false;
         AnalyzeDiarizationToggle.IsChecked = false;
@@ -191,12 +228,12 @@ public partial class MainWindow
     {
         var transcriptEnabled = AnalyzeTranscriptToggle.IsChecked == true;
         var audioEnabled = AnalyzeMusicToggle.IsChecked == true;
-        var visualsEnabled = AnalyzeGeminiToggle.IsChecked == true;
+        var visualsEnabled = AnalyzeVisualsToggle.IsChecked == true;
         var idle = !_isMediaOperationRunning;
         AnalyzeScenesToggle.IsEnabled = idle;
         AnalyzeTranscriptToggle.IsEnabled = idle;
         AnalyzeMusicToggle.IsEnabled = idle;
-        AnalyzeGeminiToggle.IsEnabled = idle;
+        AnalyzeVisualsToggle.IsEnabled = idle;
         AnalyzeOcrToggle.IsEnabled = idle;
         BuildEmbeddingsToggle.IsEnabled = idle;
         AnalyzeAlignmentToggle.IsEnabled = MediaIntelligenceUiPolicy.CanUseTranscriptFeature(transcriptEnabled, _isMediaOperationRunning);
@@ -268,6 +305,7 @@ public partial class MainWindow
             var repoRoot = FindRepoRoot();
             var ffmpegPath = ResolveFfmpegPath(repoRoot);
             var model = GetSelectedWhisperModel();
+            var visualProvider = GetSelectedVisualProvider();
             var args = new List<string>
             {
                 "-m", "rushframe_intelligence", "analyze",
@@ -279,7 +317,7 @@ public partial class MainWindow
             };
             if (profile != null)
             {
-                profile.AppendArguments(args, GetSelectedVisualProvider());
+                profile.AppendArguments(args, visualProvider);
             }
             else
             {
@@ -287,16 +325,23 @@ public partial class MainWindow
                     AnalyzeScenesToggle.IsChecked == true,
                     AnalyzeTranscriptToggle.IsChecked == true,
                     AnalyzeMusicToggle.IsChecked == true,
-                    AnalyzeGeminiToggle.IsChecked == true,
+                    AnalyzeVisualsToggle.IsChecked == true,
                     AnalyzeOcrToggle.IsChecked == true,
                     AnalyzeAlignmentToggle.IsChecked == true,
                     AnalyzeDiarizationToggle.IsChecked == true,
                     AnalyzeAudioEventsToggle.IsChecked == true,
                     BuildEmbeddingsToggle.IsChecked == true)
-                    .AppendArguments(args, GetSelectedVisualProvider());
+                    .AppendArguments(args, visualProvider);
             }
 
-            var result = await RunPythonAsync(args, repoRoot, operationCancellation.Token);
+            var requestedVisualProvider = args.Contains("--visual-provider", StringComparer.Ordinal)
+                ? visualProvider
+                : null;
+            var result = await RunPythonAsync(
+                args,
+                repoRoot,
+                operationCancellation.Token,
+                requestedVisualProvider);
             if (!string.IsNullOrWhiteSpace(result.StandardOutput)) AddMediaIntelligenceMessage(result.StandardOutput.Trim());
             if (!string.IsNullOrWhiteSpace(result.StandardError)) AddMediaIntelligenceMessage(result.StandardError.Trim());
 
@@ -556,7 +601,8 @@ public partial class MainWindow
     private async Task<ProcessResult> RunPythonAsync(
         IReadOnlyList<string> args,
         string workingDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? visualProvider = null)
     {
         var managedPython = Path.Combine(workingDirectory, ".tools", "intelligence-venv", "Scripts", "python.exe");
         foreach (var launcher in new[] { managedPython, "py", "python" })
@@ -574,8 +620,16 @@ public partial class MainWindow
 
             if (launcher == "py") psi.ArgumentList.Add("-3");
             foreach (var arg in args) psi.ArgumentList.Add(arg);
-            var geminiApiKey = SecretProtectionService.Unprotect(_settings.ProtectedGeminiApiKey);
-            if (!string.IsNullOrWhiteSpace(geminiApiKey)) psi.Environment["GEMINI_API_KEY"] = geminiApiKey;
+            if (!string.IsNullOrWhiteSpace(visualProvider))
+            {
+                if (!_visualProviderCredentialRotation.TryGetEnvironment(
+                        visualProvider,
+                        out var providerEnvironment,
+                        out var providerError))
+                    throw new InvalidOperationException(providerError);
+                foreach (var pair in providerEnvironment)
+                    psi.Environment[pair.Key] = pair.Value;
+            }
 
             try
             {
@@ -634,7 +688,8 @@ public partial class MainWindow
             (WhisperModelCombo.SelectedItem as ComboBoxItem)?.Tag as string);
 
     private string GetSelectedVisualProvider() =>
-        VisualProviderCombo.SelectedItem is ComboBoxItem item && item.Tag is string value ? value : "gemini";
+        MediaIntelligenceUiPolicy.NormalizeVisualProvider(
+            VisualProviderCombo.SelectedItem is ComboBoxItem item ? item.Tag as string : null);
 
     private static int CountArray(JsonElement root, string propertyName) =>
         root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.Array ? value.GetArrayLength() : 0;

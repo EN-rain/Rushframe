@@ -30,12 +30,13 @@ public sealed class InspectorContractTests
     }
 
     [Fact]
-    public void Inspector_core_tabs_have_real_close_and_restore_controls()
+    public void Inspector_core_tabs_close_from_their_right_click_menu_and_restore()
     {
         var shell = File.ReadAllText(SourcePath("src", "Rushframe.Desktop", "MainWindow.UiShell.cs"));
 
         Assert.Contains("Close {title} tab", shell, StringComparison.Ordinal);
-        Assert.Contains("close.Click", shell, StringComparison.Ordinal);
+        Assert.Contains("tab.ContextMenu = new ContextMenu()", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("header.Children.Add(close)", shell, StringComparison.Ordinal);
         Assert.Contains("hiddenCoreTab.Visibility = Visibility.Visible", shell, StringComparison.Ordinal);
         Assert.Contains("UpdateInspectorTabControls", shell, StringComparison.Ordinal);
     }

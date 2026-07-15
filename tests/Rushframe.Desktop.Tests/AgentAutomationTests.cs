@@ -3,6 +3,7 @@ using Rushframe.Desktop.Controllers;
 using Rushframe.Desktop.Services;
 using Rushframe.Domain;
 using Rushframe.Domain.Editing;
+using Rushframe.Domain.Serialization;
 using Rushframe.Media.Native;
 
 namespace Rushframe.Desktop.Tests;
@@ -69,6 +70,28 @@ public sealed class AgentAutomationTests : IDisposable
         Assert.False(compiled.Success);
         Assert.Contains("locked", compiled.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Single(sequence.Tracks[0].Items);
+    }
+
+    [Theory]
+    [InlineData("rename_track")]
+    [InlineData("reorder_track")]
+    public void Edit_plan_rejects_locked_track_metadata_mutations(string action)
+    {
+        var project = new Project();
+        var sequence = project.MainSequence!;
+        var track = new Track { Kind = TrackKind.Video, Name = "Locked", Locked = true };
+        sequence.Tracks.Add(track);
+        var compiler = new AgentEditPlanCompiler(new AgentEditCommandFactory());
+        var payload = action == "rename_track"
+            ? Json($$"""{ "operations": [{ "action": "rename_track", "track_id": "{{track.Id}}", "name": "Renamed" }] }""")
+            : Json($$"""{ "operations": [{ "action": "reorder_track", "track_id": "{{track.Id}}", "new_index": 0 }] }""");
+
+        var compiled = compiler.Compile(project, sequence, payload, 0);
+
+        Assert.False(compiled.Success);
+        Assert.Contains("locked", compiled.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Locked", track.Name);
+        Assert.Single(sequence.Tracks);
     }
 
     [Fact]
@@ -233,6 +256,79 @@ public sealed class AgentAutomationTests : IDisposable
 
         Assert.False(build.Success);
         Assert.Contains("finite", build.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Applied_agent_plan_record_and_workflow_follow_undo_and_redo()
+    {
+        var project = new Project();
+        var sequence = project.MainSequence!;
+        var compiler = new AgentEditPlanCompiler(new AgentEditCommandFactory());
+        var plan = compiler.Compile(project, sequence, Json("""
+        {
+          "summary": "Add approved title",
+          "operations": [
+            { "action": "add_text", "text": "Approved", "start": 0, "duration": 2 }
+          ]
+        }
+        """), 0);
+        Assert.True(plan.Success);
+        var initialStageCount = project.Workflow.Stages.Count;
+        var initialActiveStage = project.Workflow.ActiveStageId;
+        var initialAgentDraftStatus = project.Workflow.Stages.Single(stage => stage.Id == "agent_draft").Status;
+        var command = new AgentPlanApplicationCommand(project, plan, project.Revision);
+        var history = new UndoRedoStack();
+
+        Assert.True(history.Execute(sequence, command).Success);
+        project.IncrementRevision();
+        Assert.Single(project.AgentEditPlans);
+        Assert.Equal(AgentEditPlanStatus.Applied, project.AgentEditPlans[0].Status);
+        Assert.Equal("agent_draft", project.Workflow.ActiveStageId);
+        Assert.Single(sequence.Tracks.SelectMany(track => track.Items));
+
+        Assert.True(history.Undo(sequence).Success);
+        project.IncrementRevision();
+        Assert.Empty(project.AgentEditPlans);
+        Assert.Equal(initialStageCount, project.Workflow.Stages.Count);
+        Assert.Equal(initialActiveStage, project.Workflow.ActiveStageId);
+        Assert.Equal(initialAgentDraftStatus, project.Workflow.Stages.Single(stage => stage.Id == "agent_draft").Status);
+        Assert.Empty(sequence.Tracks);
+
+        Assert.True(history.Redo(sequence).Success);
+        project.IncrementRevision();
+        Assert.Single(project.AgentEditPlans);
+        Assert.Equal(project.Revision, project.AgentEditPlans[0].AppliedRevision);
+        Assert.Equal("agent_draft", project.Workflow.ActiveStageId);
+        Assert.Single(sequence.Tracks.SelectMany(track => track.Items));
+    }
+
+    [Fact]
+    public void Isolated_plan_review_mutates_only_the_snapshot()
+    {
+        var liveProject = new Project();
+        var liveSequence = liveProject.MainSequence!;
+        var liveRevision = liveProject.Revision;
+        var snapshot = ProjectSerializer.CreateSnapshot(liveProject);
+        var snapshotSequence = snapshot.MainSequence!;
+        var compiler = new AgentEditPlanCompiler(new AgentEditCommandFactory());
+        var plan = compiler.Compile(snapshot, snapshotSequence, Json("""
+        {
+          "summary": "Review title",
+          "operations": [
+            { "action": "add_text", "text": "Draft only", "start": 0, "duration": 2 }
+          ]
+        }
+        """), 0);
+
+        Assert.True(plan.Success);
+        Assert.True(plan.Command!.Execute(snapshotSequence).Success);
+        snapshot.IncrementRevision();
+
+        Assert.Empty(liveSequence.Tracks);
+        Assert.Equal(liveRevision, liveProject.Revision);
+        var snapshotTrack = Assert.Single(snapshotSequence.Tracks);
+        Assert.Equal("Draft only", Assert.Single(snapshotTrack.Items).TextContent);
+        Assert.Equal(liveRevision + 1, snapshot.Revision);
     }
 
     private static JsonElement Json(string text)

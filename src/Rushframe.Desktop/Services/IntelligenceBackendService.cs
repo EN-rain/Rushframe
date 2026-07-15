@@ -23,8 +23,9 @@ public sealed class IntelligenceBackendService : IDisposable
 
     public async Task<bool> StartAsync(
         string repoRoot,
-        string? geminiApiKey,
+        string? groqApiKey,
         string? editorSessionToken = null,
+        string? soundLibraryCatalogPath = null,
         CancellationToken cancellationToken = default)
     {
         if (await IsHealthyAsync(cancellationToken))
@@ -59,10 +60,12 @@ public sealed class IntelligenceBackendService : IDisposable
             startInfo.ArgumentList.Add("serve");
             startInfo.ArgumentList.Add("--port");
             startInfo.ArgumentList.Add(Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            if (!string.IsNullOrWhiteSpace(geminiApiKey))
-                startInfo.Environment["GEMINI_API_KEY"] = geminiApiKey;
+            if (!string.IsNullOrWhiteSpace(groqApiKey))
+                startInfo.Environment["GROQ_API_KEY"] = groqApiKey;
             if (!string.IsNullOrWhiteSpace(editorSessionToken))
                 startInfo.Environment["RUSHFRAME_EDITOR_SESSION_TOKEN"] = editorSessionToken;
+            if (!string.IsNullOrWhiteSpace(soundLibraryCatalogPath))
+                startInfo.Environment["RUSHFRAME_SOUND_LIBRARY_CATALOG"] = Path.GetFullPath(soundLibraryCatalogPath);
 
             try
             {

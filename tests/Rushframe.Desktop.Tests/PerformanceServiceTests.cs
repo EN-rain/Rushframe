@@ -52,6 +52,36 @@ public sealed class PerformanceServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProjectSaveCoordinator_ExplicitSaveReturnsExactRevisionWithoutMutatingLiveProject()
+    {
+        var autosave = new AutosaveService(Path.Combine(_root, "autosave-explicit"));
+        await using var coordinator = new ProjectSaveCoordinator(
+            new ProjectRepository(),
+            autosave,
+            EditorPerformanceTelemetry.Shared);
+        var project = new Project { SchemaVersion = 1, Revision = 7 };
+        project.AutomationProviders.Clear();
+        project.ExportVariants.Clear();
+        project.Workflow.Stages.Clear();
+        var path = Path.Combine(_root, "explicit.rushframe");
+
+        var savedRevision = await coordinator.SaveExplicitAsync(project, path);
+        var restored = new ProjectRepository().Load(path);
+
+        Assert.Equal(7, savedRevision);
+        Assert.Equal(7, coordinator.LastExplicitlySavedRevision);
+        Assert.Equal(1, project.SchemaVersion);
+        Assert.Empty(project.AutomationProviders);
+        Assert.Empty(project.ExportVariants);
+        Assert.Empty(project.Workflow.Stages);
+        Assert.NotNull(restored);
+        Assert.Equal(Project.CurrentSchemaVersion, restored!.SchemaVersion);
+        Assert.NotEmpty(restored.AutomationProviders);
+        Assert.NotEmpty(restored.ExportVariants);
+        Assert.NotEmpty(restored.Workflow.Stages);
+    }
+
+    [Fact]
     public async Task ProjectSaveCoordinator_WaitsForActiveMutationBeforeCapturingSnapshot()
     {
         var autosave = new AutosaveService(Path.Combine(_root, "autosave-mutation"));

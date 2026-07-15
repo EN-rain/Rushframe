@@ -3,7 +3,7 @@ using Rushframe.Domain.Editing;
 
 namespace Rushframe.Application;
 
-public sealed class CopyClipCommand : IEditCommand
+public sealed class CopyClipCommand : IAtomicEditCommand
 {
     public string Description => $"Copy clip {ItemId}";
 

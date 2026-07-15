@@ -69,9 +69,12 @@ public partial class MainWindow
             RefreshPreviewGuidesOverlay();
             return true;
         }
-        catch
+        catch (Exception ex)
         {
             StopRealtimeTimelinePreview(clearSurface: true);
+            var message = $"Realtime preview unavailable: {ex.Message}. Using exact preview.";
+            StatusText.Text = message;
+            AddRenderQueueMessage(message);
             return false;
         }
     }

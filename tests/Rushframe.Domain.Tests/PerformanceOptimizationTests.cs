@@ -44,11 +44,16 @@ public sealed class PerformanceOptimizationTests
             });
         }
 
-        _ = channel.GetValueAt(MediaTime.FromSeconds(2.5));
+        var sampleTimes = new MediaTime[990];
+        for (var index = 0; index < sampleTimes.Length; index++)
+            sampleTimes[index] = MediaTime.FromSeconds(index / 100.0);
+        for (var index = 0; index < 10_000; index++)
+            _ = channel.GetValueAt(sampleTimes[index % sampleTimes.Length]);
+
         var before = GC.GetAllocatedBytesForCurrentThread();
         double sum = 0;
         for (var index = 0; index < 10_000; index++)
-            sum += channel.GetValueAt(MediaTime.FromSeconds((index % 990) / 100.0));
+            sum += channel.GetValueAt(sampleTimes[index % sampleTimes.Length]);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.True(sum > 0);

@@ -8,23 +8,6 @@ namespace Rushframe.Desktop;
 
 public partial class MainWindow
 {
-    private void MergeInstalledCapabilities(Project project)
-    {
-        foreach (var provider in _installedAssetProviders)
-        {
-            project.AssetProviders.RemoveAll(existing =>
-                string.Equals(existing.Id, provider.Id, StringComparison.OrdinalIgnoreCase));
-            project.AssetProviders.Add(provider);
-        }
-
-        foreach (var extension in _installedExtensions)
-        {
-            project.Extensions.RemoveAll(existing =>
-                string.Equals(existing.Id, extension.Id, StringComparison.OrdinalIgnoreCase));
-            project.Extensions.Add(extension);
-        }
-    }
-
     private async Task ShowCreativeAssetsAsync()
     {
         var selected = new Dialogs.CreativeAssetsDialog(
@@ -36,7 +19,6 @@ public partial class MainWindow
             Path.Combine(_appData, "asset-packs"),
             Path.Combine(_appData, "extensions")).Show();
 
-        MergeInstalledCapabilities(_project);
         if (selected == null)
         {
             StatusText.Text = $"{_installedAssetProviders.Sum(provider => provider.Assets.Count)} creative assets and {_installedExtensions.Count} extension manifests available";
@@ -78,9 +60,21 @@ public partial class MainWindow
 
         if (descriptor.Id.StartsWith("builtin.shape.", StringComparison.OrdinalIgnoreCase))
         {
-            var track = EnsureAssetTrack(sequence, TrackKind.Overlay, "O1");
+            var shapeCommands = new List<IEditCommand>();
+            var track = sequence.Tracks.FirstOrDefault(candidate => candidate.Kind == TrackKind.Overlay && !candidate.Locked);
+            if (track == null)
+            {
+                track = new Track
+                {
+                    Kind = TrackKind.Overlay,
+                    Name = "O1",
+                    Order = sequence.Tracks.Count,
+                };
+                shapeCommands.Add(new AddPreparedTrackCommand { Track = track });
+            }
+
             var duration = MediaTime.FromSeconds(3);
-            Execute(new AddClipCommand
+            shapeCommands.Add(new AddClipCommand
             {
                 TrackId = track.Id,
                 Item = new TimelineItem
@@ -100,7 +94,8 @@ public partial class MainWindow
                     },
                 },
             });
-            StatusText.Text = $"Added {descriptor.Name} to the timeline";
+            if (Execute(new CompositeEditCommand($"Add built-in shape {descriptor.Name}", shapeCommands)))
+                StatusText.Text = $"Added {descriptor.Name} to the timeline";
             return;
         }
 
@@ -153,13 +148,9 @@ public partial class MainWindow
             addAsset = true;
         }
 
-        using var mutation = _saveCoordinator.BeginMutation();
+        var commands = new List<IEditCommand>();
         if (addAsset)
-        {
-            _project.MediaLibrary.Add(asset);
-            _project.IncrementRevision();
-            RefreshMediaList();
-        }
+            commands.Add(new AddProjectMediaAssetCommand(_project, asset));
 
         var trackKind = descriptor.Kind switch
         {
@@ -167,16 +158,26 @@ public partial class MainWindow
             CreativeAssetKind.Sound => TrackKind.Audio,
             _ => TrackKind.Overlay,
         };
-        var targetTrack = EnsureAssetTrack(sequence, trackKind, trackKind switch
+        var targetTrack = sequence.Tracks.FirstOrDefault(candidate => candidate.Kind == trackKind && !candidate.Locked);
+        if (targetTrack == null)
         {
-            TrackKind.Music => "Music 1",
-            TrackKind.Audio => "A1",
-            _ => "O1",
-        });
+            targetTrack = new Track
+            {
+                Kind = trackKind,
+                Name = trackKind switch
+                {
+                    TrackKind.Music => "Music 1",
+                    TrackKind.Audio => "A1",
+                    _ => "O1",
+                },
+                Order = sequence.Tracks.Count,
+            };
+            commands.Add(new AddPreparedTrackCommand { Track = targetTrack });
+        }
         var timelineDuration = asset.Duration.Seconds > 0
             ? asset.Duration
             : MediaTime.FromSeconds(mediaKind == MediaKind.Image ? 3 : 10);
-        Execute(new AddClipCommand
+        commands.Add(new AddClipCommand
         {
             TrackId = targetTrack.Id,
             Item = new TimelineItem
@@ -193,21 +194,10 @@ public partial class MainWindow
                 SourceDuration = timelineDuration,
             },
         });
-        StatusText.Text = $"Added licensed asset: {descriptor.Name}";
-    }
-
-    private static Track EnsureAssetTrack(Sequence sequence, TrackKind kind, string name)
-    {
-        var track = sequence.Tracks.FirstOrDefault(candidate => candidate.Kind == kind && !candidate.Locked);
-        if (track != null) return track;
-
-        track = new Track
+        if (Execute(new CompositeEditCommand($"Add creative asset {descriptor.Name}", commands)))
         {
-            Kind = kind,
-            Name = name,
-            Order = sequence.Tracks.Count,
-        };
-        sequence.Tracks.Add(track);
-        return track;
+            if (addAsset) RefreshMediaList();
+            StatusText.Text = $"Added licensed asset: {descriptor.Name}";
+        }
     }
 }

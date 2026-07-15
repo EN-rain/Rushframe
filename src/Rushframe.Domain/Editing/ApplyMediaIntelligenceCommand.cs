@@ -11,8 +11,8 @@ public sealed class ApplyMediaIntelligenceCommand : IEditCommand
     public int CreatedMarkerCount => _createdMarkers.Count;
     public int CreatedCaptionCount => _createdItems.Count;
 
-    private readonly List<Marker> _removedMarkers = [];
-    private readonly List<(Track Track, TimelineItem Item)> _removedItems = [];
+    private readonly List<(int Index, Marker Marker)> _removedMarkers = [];
+    private readonly List<(int TrackIndex, Track Track, int ItemIndex, TimelineItem Item)> _removedItems = [];
     private readonly List<Marker> _createdMarkers = [];
     private readonly List<TimelineItem> _createdItems = [];
     private Track? _createdTrack;
@@ -86,6 +86,7 @@ public sealed class ApplyMediaIntelligenceCommand : IEditCommand
                     Order = sequence.Tracks.Count,
                 };
                 sequence.Tracks.Add(captionTrack);
+                TrackOrdering.Normalize(sequence);
                 _createdTrack = captionTrack;
             }
 
@@ -134,16 +135,24 @@ public sealed class ApplyMediaIntelligenceCommand : IEditCommand
         }
 
         if (_createdTrack != null && _createdTrack.Items.Count == 0)
-            sequence.Tracks.Remove(_createdTrack);
-
-        foreach (var marker in _removedMarkers)
-            sequence.Markers.Add(marker);
-        foreach (var (track, item) in _removedItems)
         {
-            if (!sequence.Tracks.Contains(track))
-                sequence.Tracks.Add(track);
-            track.Items.Add(item);
+            sequence.Tracks.Remove(_createdTrack);
+            TrackOrdering.Normalize(sequence);
         }
+
+        foreach (var (markerIndex, marker) in _removedMarkers.OrderBy(entry => entry.Index))
+            sequence.Markers.Insert(Math.Min(markerIndex, sequence.Markers.Count), marker);
+        foreach (var group in _removedItems
+                     .GroupBy(entry => (entry.TrackIndex, entry.Track))
+                     .OrderBy(group => group.Key.TrackIndex))
+        {
+            var track = group.Key.Track;
+            if (!sequence.Tracks.Contains(track))
+                sequence.Tracks.Insert(Math.Min(group.Key.TrackIndex, sequence.Tracks.Count), track);
+            foreach (var entry in group.OrderBy(entry => entry.ItemIndex))
+                track.Items.Insert(Math.Min(entry.ItemIndex, track.Items.Count), entry.Item);
+        }
+        TrackOrdering.Normalize(sequence);
 
         _createdMarkers.Clear();
         _createdItems.Clear();
@@ -155,23 +164,29 @@ public sealed class ApplyMediaIntelligenceCommand : IEditCommand
 
     private void RemovePreviousGeneratedContent(Sequence sequence)
     {
-        foreach (var marker in sequence.Markers
-                     .Where(marker => marker.MediaIntelligenceSourceAssetId == Analysis.MediaAssetId)
-                     .ToList())
+        for (var markerIndex = 0; markerIndex < sequence.Markers.Count; markerIndex++)
         {
-            _removedMarkers.Add(marker);
-            sequence.Markers.Remove(marker);
+            var marker = sequence.Markers[markerIndex];
+            if (marker.MediaIntelligenceSourceAssetId == Analysis.MediaAssetId)
+                _removedMarkers.Add((markerIndex, marker));
         }
+        foreach (var (markerIndex, _) in _removedMarkers.OrderByDescending(entry => entry.Index))
+            sequence.Markers.RemoveAt(markerIndex);
 
-        foreach (var track in sequence.Tracks.ToList())
+        for (var trackIndex = 0; trackIndex < sequence.Tracks.Count; trackIndex++)
         {
-            foreach (var item in track.Items
-                         .Where(item => item.MediaIntelligenceSourceAssetId == Analysis.MediaAssetId)
-                         .ToList())
+            var track = sequence.Tracks[trackIndex];
+            var removedFromTrack = new List<(int ItemIndex, TimelineItem Item)>();
+            for (var itemIndex = 0; itemIndex < track.Items.Count; itemIndex++)
             {
-                _removedItems.Add((track, item));
-                track.Items.Remove(item);
+                var item = track.Items[itemIndex];
+                if (item.MediaIntelligenceSourceAssetId == Analysis.MediaAssetId)
+                    removedFromTrack.Add((itemIndex, item));
             }
+            foreach (var (itemIndex, item) in removedFromTrack)
+                _removedItems.Add((trackIndex, track, itemIndex, item));
+            foreach (var (itemIndex, _) in removedFromTrack.OrderByDescending(entry => entry.ItemIndex))
+                track.Items.RemoveAt(itemIndex);
         }
     }
 

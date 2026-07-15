@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class DeleteClipCommand : IEditCommand
+public sealed class DeleteClipCommand : IAtomicEditCommand
 {
     public string Description => $"Delete clip {ItemId}";
 
@@ -9,6 +9,7 @@ public sealed class DeleteClipCommand : IEditCommand
     private TrackId _trackId;
     private int _index;
     private TimelineItem? _removed;
+    private readonly List<(int Index, Transition Transition)> _removedTransitions = [];
 
     public EditResult Execute(Sequence sequence)
     {
@@ -22,6 +23,15 @@ public sealed class DeleteClipCommand : IEditCommand
             _trackId = track.Id;
             _index = idx;
             _removed = track.Items[idx];
+            _removedTransitions.Clear();
+            for (var transitionIndex = 0; transitionIndex < sequence.Transitions.Count; transitionIndex++)
+            {
+                var transition = sequence.Transitions[transitionIndex];
+                if (transition.LeftItemId == ItemId || transition.RightItemId == ItemId)
+                    _removedTransitions.Add((transitionIndex, transition));
+            }
+            foreach (var (transitionIndex, _) in _removedTransitions.OrderByDescending(entry => entry.Index))
+                sequence.Transitions.RemoveAt(transitionIndex);
             track.Items.RemoveAt(idx);
             return EditResult.Ok();
         }
@@ -37,6 +47,9 @@ public sealed class DeleteClipCommand : IEditCommand
         if (track == null) return EditResult.Fail("Track not found");
 
         track.Items.Insert(Math.Min(_index, track.Items.Count), _removed);
+        foreach (var (transitionIndex, transition) in _removedTransitions.OrderBy(entry => entry.Index))
+            sequence.Transitions.Insert(Math.Min(transitionIndex, sequence.Transitions.Count), transition);
+        _removedTransitions.Clear();
         _removed = null;
         return EditResult.Ok();
     }

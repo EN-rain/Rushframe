@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 extern "C" rf_result RF_CALL rf_scale_bgra(
     const std::uint8_t* source,
     std::int32_t source_width,
@@ -17,7 +18,12 @@ extern "C" rf_result RF_CALL rf_scale_bgra(
         return rf_fail(RF_INVALID_ARGUMENT, "source or destination is null");
     if (source_width <= 0 || source_height <= 0 || destination_width <= 0 || destination_height <= 0)
         return rf_fail(RF_INVALID_ARGUMENT, "invalid frame dimensions");
-    if (source_stride < source_width * 4 || destination_stride < destination_width * 4)
+    if (source_width > std::numeric_limits<std::int32_t>::max() / 4
+        || destination_width > std::numeric_limits<std::int32_t>::max() / 4)
+        return rf_fail(RF_INVALID_ARGUMENT, "frame width overflows BGRA stride");
+    const auto minimum_source_stride = source_width * 4;
+    const auto minimum_destination_stride = destination_width * 4;
+    if (source_stride < minimum_source_stride || destination_stride < minimum_destination_stride)
         return rf_fail(RF_BUFFER_TOO_SMALL, "frame stride is too small");
 
     try {

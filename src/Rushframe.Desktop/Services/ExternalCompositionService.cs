@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using Rushframe.Domain;
+using Rushframe.Infrastructure;
 using Rushframe.Media.Native;
 
 namespace Rushframe.Desktop.Services;
@@ -33,6 +34,7 @@ public sealed class ExternalCompositionService
 
         string? outputPath = null;
         string? executablePath = null;
+        string? entryPointPath = null;
         if (projectDirectory != null)
         {
             outputPath = ResolveOutputPath(spec, projectDirectory, rushframeProjectPath, errors);
@@ -41,13 +43,30 @@ public sealed class ExternalCompositionService
                 errors.Add($"The project-local {spec.Kind} executable is not installed. Install dependencies in the composition directory first; Rushframe will not download packages at runtime.");
             if (spec.Kind == ExternalCompositionKind.Remotion)
             {
-                if (string.IsNullOrWhiteSpace(spec.EntryPoint)) errors.Add("Remotion entry point is required.");
+                if (string.IsNullOrWhiteSpace(spec.EntryPoint))
+                {
+                    errors.Add("Remotion entry point is required.");
+                }
+                else
+                {
+                    try
+                    {
+                        if (Uri.TryCreate(spec.EntryPoint, UriKind.Absolute, out var entryUri)
+                            && entryUri.Scheme is "http" or "https")
+                            throw new InvalidOperationException("Remote entry points are not allowed.");
+                        entryPointPath = LocalPhysicalPathGuard.ResolveContainedExistingFile(projectDirectory, spec.EntryPoint);
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
+                    {
+                        errors.Add($"Remotion entry point must be a contained local file: {ex.Message}");
+                    }
+                }
                 if (string.IsNullOrWhiteSpace(spec.CompositionId)) errors.Add("Remotion composition ID is required.");
             }
             if (spec.Kind == ExternalCompositionKind.HyperFrames && !File.Exists(Path.Combine(projectDirectory, "package.json")))
                 warnings.Add("HyperFrames project has no package.json; verify that this is an initialized local composition.");
         }
-        return new ExternalCompositionValidation(errors.Count == 0, projectDirectory, outputPath, executablePath, errors, warnings);
+        return new ExternalCompositionValidation(errors.Count == 0, projectDirectory, outputPath, executablePath, entryPointPath, errors, warnings);
     }
 
     public async Task<ExternalCompositionRenderResult> RenderAsync(
@@ -57,25 +76,11 @@ public sealed class ExternalCompositionService
     {
         var validation = Validate(spec, rushframeProjectPath);
         if (!validation.Success || validation.ProjectDirectory == null || validation.OutputPath == null || validation.ExecutablePath == null)
-        {
-            spec.Status = ExternalCompositionStatus.Failed;
-            spec.LastError = string.Join(" ", validation.Errors);
             return ExternalCompositionRenderResult.Fail(validation.Errors, validation.Warnings);
-        }
 
-        spec.Status = ExternalCompositionStatus.Rendering;
-        spec.LastError = null;
         Directory.CreateDirectory(Path.GetDirectoryName(validation.OutputPath)!);
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = validation.ExecutablePath,
-            WorkingDirectory = validation.ProjectDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        AddArguments(startInfo, spec, validation.OutputPath);
+        var startInfo = CreateRendererStartInfo(validation.ExecutablePath, validation.ProjectDirectory);
+        AddArguments(startInfo, spec, validation.OutputPath, validation.EntryPointPath);
 
         using var process = Process.Start(startInfo)
                             ?? throw new InvalidOperationException($"Failed to start the local {spec.Kind} renderer.");
@@ -88,19 +93,16 @@ public sealed class ExternalCompositionService
         catch (OperationCanceledException)
         {
             TryKill(process);
-            spec.Status = ExternalCompositionStatus.Failed;
-            spec.LastError = "Composition render was canceled.";
             throw;
         }
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         if (process.ExitCode != 0 || !File.Exists(validation.OutputPath))
         {
-            spec.Status = ExternalCompositionStatus.Failed;
-            spec.LastError = string.IsNullOrWhiteSpace(stderr)
+            var error = string.IsNullOrWhiteSpace(stderr)
                 ? $"{spec.Kind} exited with code {process.ExitCode}."
                 : stderr;
-            return ExternalCompositionRenderResult.Fail([spec.LastError], validation.Warnings, stdout, stderr);
+            return ExternalCompositionRenderResult.Fail([error], validation.Warnings, stdout, stderr);
         }
 
         var evidenceDirectory = Path.Combine(
@@ -116,15 +118,6 @@ public sealed class ExternalCompositionService
             evidenceTimestamps: null,
             cancellationToken);
         var hash = await ComputeFileHashAsync(validation.OutputPath, cancellationToken);
-        spec.OutputPath = validation.OutputPath;
-        spec.LastOutputSha256 = hash;
-        spec.LastRenderedUtc = DateTimeOffset.UtcNow;
-        spec.Status = verification.Status == MediaExportVerificationStatus.Failed
-            ? ExternalCompositionStatus.Failed
-            : ExternalCompositionStatus.Rendered;
-        spec.LastError = verification.Status == MediaExportVerificationStatus.Failed
-            ? string.Join(" ", verification.Errors)
-            : null;
         return new ExternalCompositionRenderResult(
             verification.Status != MediaExportVerificationStatus.Failed,
             validation.OutputPath,
@@ -136,13 +129,38 @@ public sealed class ExternalCompositionService
             stderr);
     }
 
-    private static void AddArguments(ProcessStartInfo startInfo, ExternalCompositionSpec spec, string outputPath)
+    private static ProcessStartInfo CreateRendererStartInfo(string executablePath, string workingDirectory)
+    {
+        var isBatchLauncher = OperatingSystem.IsWindows()
+                              && Path.GetExtension(executablePath) is ".cmd" or ".bat";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = isBatchLauncher
+                ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+                : executablePath,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        if (isBatchLauncher)
+        {
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(executablePath);
+        }
+        return startInfo;
+    }
+
+    private static void AddArguments(ProcessStartInfo startInfo, ExternalCompositionSpec spec, string outputPath, string? entryPointPath)
     {
         switch (spec.Kind)
         {
             case ExternalCompositionKind.Remotion:
                 startInfo.ArgumentList.Add("render");
-                startInfo.ArgumentList.Add(spec.EntryPoint!);
+                startInfo.ArgumentList.Add(entryPointPath ?? throw new InvalidOperationException("Validated Remotion entry point is unavailable."));
                 startInfo.ArgumentList.Add(spec.CompositionId!);
                 startInfo.ArgumentList.Add(outputPath);
                 startInfo.ArgumentList.Add("--width");
@@ -180,8 +198,12 @@ public sealed class ExternalCompositionService
         try
         {
             var path = Path.GetFullPath(value.Trim());
-            if (!Directory.Exists(path)) errors.Add("Composition project directory does not exist.");
-            return path;
+            if (!Directory.Exists(path))
+            {
+                errors.Add("Composition project directory does not exist.");
+                return path;
+            }
+            return LocalPhysicalPathGuard.ResolveContainedExistingDirectory(path, path);
         }
         catch (Exception ex)
         {
@@ -209,13 +231,18 @@ public sealed class ExternalCompositionService
                 var rushframeDirectory = Path.GetDirectoryName(Path.GetFullPath(rushframeProjectPath));
                 if (!string.IsNullOrWhiteSpace(rushframeDirectory)) allowedRoots.Add(rushframeDirectory);
             }
-            if (!allowedRoots.Any(root => IsContained(root, output)))
+            foreach (var root in allowedRoots)
             {
-                errors.Add("Composition output must stay inside the composition directory or the saved Rushframe project directory.");
-                return null;
+                try
+                {
+                    return LocalOutputPathGuard.Resolve(root, output);
+                }
+                catch (InvalidOperationException)
+                {
+                }
             }
-            if (IsNetworkPath(output)) errors.Add("Composition output must use a local drive.");
-            return output;
+            errors.Add("Composition output must stay physically inside the local composition directory or saved Rushframe project directory.");
+            return null;
         }
         catch (Exception ex)
         {
@@ -234,14 +261,15 @@ public sealed class ExternalCompositionService
         };
         if (string.IsNullOrWhiteSpace(fileName)) return null;
         var candidate = Path.Combine(projectDirectory, "node_modules", ".bin", fileName);
-        return File.Exists(candidate) ? candidate : null;
-    }
-
-    private static bool IsContained(string root, string candidate)
-    {
-        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var normalizedCandidate = Path.GetFullPath(candidate);
-        return normalizedCandidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
+        if (!File.Exists(candidate)) return null;
+        try
+        {
+            return LocalPhysicalPathGuard.ResolveContainedExistingFile(projectDirectory, candidate);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     private static bool IsNetworkPath(string path) =>
@@ -295,6 +323,7 @@ public sealed record ExternalCompositionValidation(
     string? ProjectDirectory,
     string? OutputPath,
     string? ExecutablePath,
+    string? EntryPointPath,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings);
 

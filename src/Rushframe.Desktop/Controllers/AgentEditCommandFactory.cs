@@ -20,19 +20,7 @@ internal sealed record AgentEditBuildResult(bool Success, IEditCommand? Command,
 /// </summary>
 internal sealed class AgentEditCommandFactory
 {
-    public static readonly IReadOnlyList<string> SupportedActions =
-    [
-        "add_text", "add_caption", "add_clip", "add_music", "move_clip", "trim_clip",
-        "split_clip", "delete_clip", "ripple_delete_clip", "duplicate_clip",
-        "set_transform", "set_item_properties", "set_text_content", "set_text_properties",
-        "add_transition", "add_effect", "remove_effect", "update_effect", "reorder_effect",
-        "set_animation_channels", "set_masks", "set_chroma_key",
-        "add_marker", "edit_marker", "delete_marker", "clear_markers",
-        "add_track", "delete_track", "duplicate_track", "rename_track", "reorder_track",
-        "toggle_track_mute", "toggle_track_solo", "toggle_track_lock", "update_sequence",
-        "add_captions_from_transcript", "create_clip_from_transcript",
-        "assemble_best_moments", "use_best_take", "remove_silence",
-    ];
+    public static IReadOnlyList<string> SupportedActions => AgentEditSkillCatalog.SupportedActions;
 
     public AgentEditBuildResult Build(Project project, Sequence sequence, JsonElement payload, string action, double playheadSeconds)
     {
@@ -275,6 +263,8 @@ internal sealed class AgentEditCommandFactory
             var value = MediaTime.FromSeconds(Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "fade_out", 0), 0, item.Duration.Seconds));
             commands.Add(SetValue(itemId, nameof(TimelineItem.FadeOutDuration), value, i => i.FadeOutDuration, (i, v) => i.FadeOutDuration = (MediaTime)v!));
         }
+        AddVisualTransitionProperty(commands, payload, item, itemId, "visual_transition_in", "visual_transition_in_duration", true);
+        AddVisualTransitionProperty(commands, payload, item, itemId, "visual_transition_out", "visual_transition_out_duration", false);
         if (AgentPayloadReader.HasProperty(payload, "speed"))
         {
             var speed = Math.Clamp(AgentPayloadReader.ReadSeconds(payload, "speed", 1), 0.05, 100);
@@ -365,6 +355,9 @@ internal sealed class AgentEditCommandFactory
         if (!Enum.TryParse<TransitionKind>(kindText, true, out var kind)) return AgentEditBuildResult.Fail($"Unknown transition: {kindText}");
         var duration = AgentPayloadReader.ReadSeconds(payload, "duration", 0.5);
         var alignment = AgentPayloadReader.ReadSeconds(payload, "alignment", 0.5);
+        var audioModeText = AgentPayloadReader.ReadString(payload, "audio_mode") ?? nameof(TransitionAudioMode.None);
+        if (!Enum.TryParse<TransitionAudioMode>(audioModeText, true, out var audioMode))
+            return AgentEditBuildResult.Fail($"Unknown transition audio mode: {audioModeText}");
         return AgentEditBuildResult.Ok(
             new ApplyTransitionCommand
             {
@@ -373,6 +366,7 @@ internal sealed class AgentEditCommandFactory
                 Kind = kind,
                 Duration = MediaTime.FromSeconds(Math.Max(0.05, duration)),
                 Alignment = Math.Clamp(alignment, 0, 1),
+                AudioMode = audioMode,
             },
             $"Apply {kind} transition");
     }
@@ -676,13 +670,24 @@ internal sealed class AgentEditCommandFactory
         var count = Math.Clamp(AgentPayloadReader.ReadInt(payload, "count", 5), 1, 50);
         var maximumDuration = Math.Max(0.1, AgentPayloadReader.ReadSeconds(payload, "maximum_duration", 30));
         var role = AgentPayloadReader.ReadString(payload, "role");
-        var candidates = analysis.Moments
+        var candidatePool = analysis.Moments
             .Where(moment => string.IsNullOrWhiteSpace(role) || moment.EditingRoles.Any(value => value.Equals(role, StringComparison.OrdinalIgnoreCase)))
             .OrderByDescending(moment => moment.Scores.Overall)
             .ThenByDescending(moment => moment.Confidence)
-            .Take(count * 3)
+            .Take(count * 6)
             .ToArray();
-        if (candidates.Length == 0) return AgentEditBuildResult.Fail("No editing moments match the request");
+        if (candidatePool.Length == 0) return AgentEditBuildResult.Fail("No editing moments match the request");
+        var selectedCandidates = new List<MediaIntelligenceMoment>();
+        foreach (var candidate in candidatePool)
+        {
+            var candidateWords = TokenizeMoment(candidate);
+            var tooSimilar = selectedCandidates.Any(selected => Jaccard(candidateWords, TokenizeMoment(selected)) >= 0.72);
+            var overlaps = selectedCandidates.Any(selected => candidate.Start < selected.End && candidate.End > selected.Start);
+            if (tooSimilar || overlaps) continue;
+            selectedCandidates.Add(candidate);
+            if (selectedCandidates.Count >= count) break;
+        }
+        var candidates = selectedCandidates.OrderBy(moment => moment.Start.Seconds).ToArray();
 
         var commands = new List<IEditCommand>();
         if (addTrackCommand != null) commands.Add(addTrackCommand);
@@ -713,6 +718,20 @@ internal sealed class AgentEditCommandFactory
         return clipCount == 0
             ? AgentEditBuildResult.Fail("No moments fit the requested duration")
             : AgentEditBuildResult.Ok(new CompositeEditCommand("Assemble best moments", commands), $"Assemble {clipCount} moments ({total:0.##}s)");
+    }
+
+    private static HashSet<string> TokenizeMoment(MediaIntelligenceMoment moment) =>
+        string.Join(' ', moment.Summary, moment.Speech, string.Join(' ', moment.Tags))
+            .Split([' ', '\t', '\r', '\n', '.', ',', '!', '?', ':', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(value => value.ToLowerInvariant())
+            .Where(value => value.Length > 2)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static double Jaccard(HashSet<string> left, HashSet<string> right)
+    {
+        if (left.Count == 0 || right.Count == 0) return 0;
+        var intersection = left.Count(right.Contains);
+        return intersection / (double)(left.Count + right.Count - intersection);
     }
 
     private static AgentEditBuildResult BuildBestTake(Project project, Sequence sequence, JsonElement payload, double playheadSeconds)
@@ -843,6 +862,43 @@ internal sealed class AgentEditCommandFactory
             return new FrameRate(numerator, denominator);
         }
         return fallback;
+    }
+
+    private static void AddVisualTransitionProperty(
+        ICollection<IEditCommand> commands,
+        JsonElement payload,
+        TimelineItem item,
+        TimelineItemId itemId,
+        string kindProperty,
+        string durationProperty,
+        bool incoming)
+    {
+        if (!AgentPayloadReader.HasProperty(payload, kindProperty)
+            && !AgentPayloadReader.HasProperty(payload, durationProperty))
+            return;
+
+        var currentKind = incoming ? item.VisualTransitionIn : item.VisualTransitionOut;
+        var currentDuration = incoming ? item.VisualTransitionInDuration : item.VisualTransitionOutDuration;
+        var kindText = AgentPayloadReader.ReadString(payload, kindProperty);
+        var kind = currentKind;
+        if (!string.IsNullOrWhiteSpace(kindText)
+            && !Enum.TryParse<ItemTransitionKind>(kindText, true, out kind))
+            throw new InvalidOperationException($"Unknown item transition '{kindText}'");
+        var duration = AgentPayloadReader.HasProperty(payload, durationProperty)
+            ? MediaTime.FromSeconds(Math.Clamp(AgentPayloadReader.ReadSeconds(payload, durationProperty, 0.35), 0, item.Duration.Seconds))
+            : currentDuration;
+        if (kind == ItemTransitionKind.None) duration = MediaTime.Zero;
+
+        if (incoming)
+        {
+            commands.Add(SetValue(itemId, nameof(TimelineItem.VisualTransitionIn), kind, value => value.VisualTransitionIn, (value, raw) => value.VisualTransitionIn = (ItemTransitionKind)raw!));
+            commands.Add(SetValue(itemId, nameof(TimelineItem.VisualTransitionInDuration), duration, value => value.VisualTransitionInDuration, (value, raw) => value.VisualTransitionInDuration = (MediaTime)raw!));
+        }
+        else
+        {
+            commands.Add(SetValue(itemId, nameof(TimelineItem.VisualTransitionOut), kind, value => value.VisualTransitionOut, (value, raw) => value.VisualTransitionOut = (ItemTransitionKind)raw!));
+            commands.Add(SetValue(itemId, nameof(TimelineItem.VisualTransitionOutDuration), duration, value => value.VisualTransitionOutDuration, (value, raw) => value.VisualTransitionOutDuration = (MediaTime)raw!));
+        }
     }
 
     private static void AddDoubleProperty(

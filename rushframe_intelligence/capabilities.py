@@ -18,8 +18,8 @@ _MODULES = {
     "speaker_diarization": "pyannote.audio",
     "ocr": "paddleocr",
     "sound_events": "laion_clap",
-    "local_visual_understanding": "transformers",
-    "gemini_visual_understanding": "httpx",
+    "groq_visual_understanding": "httpx",
+    "cloudflare_visual_understanding": "httpx",
 }
 
 

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
-from rushframe_intelligence.gemini_analyzer import analyze_frame
+import httpx
+
 from rushframe_intelligence.models import SceneAnalysis
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
@@ -21,67 +25,135 @@ class VisualProvider(Protocol):
     def analyze(self, frame_paths: list[Path], transcript: str = "") -> dict[str, Any]: ...
 
 
-class GeminiFrameProvider:
-    """Cloud fallback. Each invocation is explicit and requires GEMINI_API_KEY."""
+class GroqFrameProvider:
+    """GroqCloud vision provider using the OpenAI-compatible chat endpoint."""
+
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model or os.getenv(
+            "RUSHFRAME_GROQ_MODEL",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+        )
 
     def analyze(self, frame_paths: list[Path], transcript: str = "") -> dict[str, Any]:
-        if not frame_paths:
-            return {}
-        return analyze_frame(
-            frame_paths[len(frame_paths) // 2],
-            prompt=_prompt(transcript),
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
+        if not api_key:
+            raise VisualUnderstandingUnavailable("GROQ_API_KEY is not configured")
+        return _analyze_openai_compatible_frames(
+            endpoint="https://api.groq.com/openai/v1/chat/completions",
+            api_key=api_key,
+            model=self.model,
+            frame_paths=frame_paths,
+            transcript=transcript,
+            provider_name="GroqCloud",
         )
 
 
-class QwenLocalProvider:
-    """Optional local Qwen2.5-VL adapter loaded only when selected."""
+class CloudflareFrameProvider:
+    """Cloudflare Workers AI vision provider using its OpenAI-compatible endpoint."""
 
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct") -> None:
-        self.model_name = model_name
-        self._model: Any = None
-        self._processor: Any = None
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model or os.getenv(
+            "RUSHFRAME_CLOUDFLARE_MODEL",
+            "@cf/meta/llama-4-scout-17b-16e-instruct",
+        )
 
-    def _load(self) -> None:
-        if self._model is not None:
-            return
-        try:
-            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-        except ImportError as exc:
+    def analyze(self, frame_paths: list[Path], transcript: str = "") -> dict[str, Any]:
+        account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        api_token = (
+            os.getenv("CLOUDFLARE_API_TOKEN")
+            or os.getenv("CLOUDFLARE_AUTH_TOKEN")
+            or ""
+        ).strip()
+        if not account_id or not api_token:
             raise VisualUnderstandingUnavailable(
-                "transformers is required for the local Qwen visual provider."
-            ) from exc
-        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            self.model_name,
-            torch_dtype="auto",
-            device_map="auto",
+                "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required"
+            )
+        endpoint = (
+            "https://api.cloudflare.com/client/v4/accounts/"
+            f"{quote(account_id, safe='')}/ai/v1/chat/completions"
         )
-        self._processor = AutoProcessor.from_pretrained(self.model_name)
+        return _analyze_openai_compatible_frames(
+            endpoint=endpoint,
+            api_key=api_token,
+            model=self.model,
+            frame_paths=frame_paths,
+            transcript=transcript,
+            provider_name="Cloudflare Workers AI",
+        )
 
-    def analyze(self, frame_paths: list[Path], transcript: str = "") -> dict[str, Any]:
-        self._load()
-        try:
-            from qwen_vl_utils import process_vision_info
-        except ImportError as exc:
-            raise VisualUnderstandingUnavailable("qwen-vl-utils is required for Qwen visual input.") from exc
 
-        content: list[dict[str, Any]] = [
-            {"type": "image", "image": str(path)} for path in frame_paths
-        ]
-        content.append({"type": "text", "text": _prompt(transcript)})
-        messages = [{"role": "user", "content": content}]
-        text = self._processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs = process_vision_info(messages)
-        inputs = self._processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-        ).to(self._model.device)
-        generated = self._model.generate(**inputs, max_new_tokens=512)
-        trimmed = [output[len(source):] for source, output in zip(inputs.input_ids, generated)]
-        response = self._processor.batch_decode(trimmed, skip_special_tokens=True)[0]
-        return _parse_json(response)
+def _analyze_openai_compatible_frames(
+    *,
+    endpoint: str,
+    api_key: str,
+    model: str,
+    frame_paths: list[Path],
+    transcript: str,
+    provider_name: str,
+) -> dict[str, Any]:
+    if not frame_paths:
+        return {}
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": _prompt(transcript)}]
+    for path in frame_paths[:5]:
+        image = Path(path)
+        mime_type = "image/png" if image.suffix.lower() == ".png" else "image/jpeg"
+        encoded = base64.b64encode(image.read_bytes()).decode("ascii")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+            }
+        )
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.1,
+        "max_tokens": 768,
+        "stream": False,
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            response = client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise VisualUnderstandingUnavailable(
+            f"{provider_name} request failed: {exc}"
+        ) from exc
+
+    if response.is_error:
+        detail = response.text[:500].strip()
+        raise VisualUnderstandingUnavailable(
+            f"{provider_name} request failed with HTTP {response.status_code}: {detail}"
+        )
+
+    try:
+        body = response.json()
+        raw_content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise VisualUnderstandingUnavailable(
+            f"{provider_name} returned an unexpected response"
+        ) from exc
+
+    if isinstance(raw_content, list):
+        raw_content = "\n".join(
+            str(item.get("text", ""))
+            for item in raw_content
+            if isinstance(item, dict) and item.get("text")
+        )
+    if not isinstance(raw_content, str):
+        raise VisualUnderstandingUnavailable(
+            f"{provider_name} returned non-text content"
+        )
+    return _parse_json(raw_content)
 
 
 def _prompt(transcript: str) -> str:

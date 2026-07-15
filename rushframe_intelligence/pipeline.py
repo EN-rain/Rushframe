@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -35,12 +38,43 @@ from rushframe_intelligence.scene_detector import detect_scenes
 from rushframe_intelligence.serialization import load_analysis
 from rushframe_intelligence.transcriber import transcribe
 from rushframe_intelligence.visual_analyzer import (
-    GeminiFrameProvider,
-    QwenLocalProvider,
+    CloudflareFrameProvider,
+    GroqFrameProvider,
     VisualProvider,
     apply_visual_result,
 )
 from rushframe_intelligence.visual_quality import score_scenes
+
+
+class _AnalysisDestinationLock:
+    def __init__(self, destination: Path, stale_seconds: float = 3600.0) -> None:
+        self.path = destination.parent / f".{destination.name}.analysis.lock"
+        self._closed = False
+        try:
+            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - self.path.stat().st_mtime
+            except FileNotFoundError:
+                age = 0
+            if age <= stale_seconds:
+                raise RuntimeError(f"Analysis is already running for {destination}")
+            self.path.unlink(missing_ok=True)
+            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"pid": os.getpid(), "created": time.time()}))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.path.unlink(missing_ok=True)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except OSError:
+            pass
 
 
 class MediaIntelligencePipeline:
@@ -61,7 +95,7 @@ class MediaIntelligencePipeline:
         transcribe_speech: bool = True,
         analyze_audio: bool = True,
         understand_frames: bool = False,
-        visual_provider: str = "gemini",
+        visual_provider: str = "groq",
         whisper_model: str = "small",
         language: str | None = None,
         max_input_seconds: float = 900.0,
@@ -76,29 +110,31 @@ class MediaIntelligencePipeline:
         if not source.is_file():
             raise FileNotFoundError(f"Media file does not exist: {source}")
         destination = Path(output_dir).resolve()
-        destination.mkdir(parents=True, exist_ok=True)
+        destination.parent.mkdir(parents=True, exist_ok=True)
 
         max_input_seconds = max(30.0, min(float(max_input_seconds), 1800.0))
-        enabled_features = ["probe", "moments", "duplicates", "context_index", f"max_input:{max_input_seconds:.3f}"]
+        requested_features = ["probe", "moments", "duplicates", "context_index", f"max_input:{max_input_seconds:.3f}"]
         if detect_visual_scenes:
-            enabled_features.extend(["scenes", "frames", "visual_quality"])
+            requested_features.extend(["scenes", "frames", "visual_quality"])
         if transcribe_speech:
-            enabled_features.append("transcript")
+            requested_features.append("transcript")
         if analyze_audio:
-            enabled_features.extend(["audio_metrics", "music"])
+            requested_features.extend(["audio_metrics", "music"])
         if understand_frames:
-            enabled_features.append(f"visual_understanding:{visual_provider}")
+            requested_features.append(f"visual_understanding:{visual_provider}")
         if enable_ocr:
-            enabled_features.append("ocr")
+            requested_features.append("ocr")
         if enable_alignment:
-            enabled_features.append("word_alignment")
+            requested_features.append("word_alignment")
         if enable_diarization:
-            enabled_features.append("diarization")
+            requested_features.append("diarization")
         if enable_audio_events:
-            enabled_features.append("semantic_audio_events")
+            requested_features.append("semantic_audio_events")
         if enable_embeddings:
-            enabled_features.append("embeddings")
+            requested_features.append("embeddings")
+        completed_features = {f"max_input:{max_input_seconds:.3f}"}
 
+        destination_lock = _AnalysisDestinationLock(destination)
         manifest_path = destination / "manifest.json"
         analysis_path = destination / "media-analysis.json"
         existing_manifest = load_manifest(manifest_path)
@@ -106,7 +142,7 @@ class MediaIntelligencePipeline:
         if (
             not force
             and analysis_path.is_file()
-            and is_fast_cache_valid(existing_manifest, source, fast_fingerprint, enabled_features)
+            and is_fast_cache_valid(existing_manifest, source, fast_fingerprint, requested_features)
         ):
             return load_analysis(analysis_path)
 
@@ -114,19 +150,24 @@ class MediaIntelligencePipeline:
         if (
             not force
             and analysis_path.is_file()
-            and is_cache_valid(existing_manifest, source, checksum, enabled_features)
+            and is_cache_valid(existing_manifest, source, checksum, requested_features)
         ):
             return load_analysis(analysis_path)
+
+        self._cleanup_stale_staging(destination)
+        working_destination = destination.parent / f".{destination.name}.staging-{uuid.uuid4().hex}"
+        working_destination.mkdir(parents=True, exist_ok=False)
 
         result = MediaAnalysis(source_path=str(source), source_checksum=checksum)
         analysis_source = source
         try:
             result.metadata = probe_media(source, self.ffprobe_path, self.ffmpeg_path)
+            completed_features.add("probe")
         except Exception as exc:
             result.warnings.append(f"technical probe failed: {exc}")
 
         if result.metadata.duration > max_input_seconds:
-            clipped_source = destination / "analysis-input.mkv"
+            clipped_source = working_destination / "analysis-input.mkv"
             process = run_tool(
                 self.ffmpeg_path,
                 [
@@ -152,6 +193,7 @@ class MediaIntelligencePipeline:
         if detect_visual_scenes and result.metadata.has_video:
             try:
                 result.scenes = detect_scenes(analysis_source)
+                completed_features.add("scenes")
             except Exception as exc:
                 result.warnings.append(f"scene detection skipped: {exc}")
         if result.metadata.has_video and not result.scenes and result.metadata.duration > 0:
@@ -174,6 +216,7 @@ class MediaIntelligencePipeline:
                     device=os.getenv("RUSHFRAME_WHISPER_DEVICE", "cpu"),
                     compute_type=os.getenv("RUSHFRAME_WHISPER_COMPUTE_TYPE", "int8"),
                 )
+                completed_features.add("transcript")
             except Exception as exc:
                 result.warnings.append(f"transcription skipped: {exc}")
 
@@ -184,11 +227,13 @@ class MediaIntelligencePipeline:
                     ffmpeg_path=self.ffmpeg_path,
                     media_duration=result.metadata.duration,
                 )
+                completed_features.add("audio_metrics")
             except Exception as exc:
                 result.warnings.append(f"audio metrics skipped: {exc}")
                 result.audio = AudioAnalysis()
             try:
                 result.audio.music = analyze_music(analysis_source, ffmpeg_path=self.ffmpeg_path)
+                completed_features.add("music")
             except Exception as exc:
                 result.warnings.append(f"music analysis skipped: {exc}")
 
@@ -196,15 +241,17 @@ class MediaIntelligencePipeline:
             detect_visual_scenes or understand_frames or enable_ocr
         )
         if should_sample_frames:
-            result.warnings.extend(
-                extract_scene_frames(
-                    analysis_source,
-                    result.scenes,
-                    destination / "frames",
-                    ffmpeg_path=self.ffmpeg_path,
-                )
+            frame_warnings = extract_scene_frames(
+                analysis_source,
+                result.scenes,
+                working_destination / "frames",
+                ffmpeg_path=self.ffmpeg_path,
             )
+            result.warnings.extend(frame_warnings)
+            if any(scene.frame_paths for scene in result.scenes):
+                completed_features.add("frames")
             result.warnings.extend(score_scenes(result.scenes))
+            completed_features.add("visual_quality")
 
         if enable_alignment and result.transcript:
             try:
@@ -214,6 +261,7 @@ class MediaIntelligencePipeline:
                     language=language,
                     device=os.getenv("RUSHFRAME_WHISPERX_DEVICE", "cpu"),
                 )
+                completed_features.add("word_alignment")
             except OptionalFeatureUnavailable as exc:
                 result.warnings.append(f"word alignment skipped: {exc}")
             except Exception as exc:
@@ -222,6 +270,7 @@ class MediaIntelligencePipeline:
         if enable_ocr and result.scenes:
             try:
                 result.warnings.extend(apply_ocr(result.scenes))
+                completed_features.add("ocr")
             except OptionalFeatureUnavailable as exc:
                 result.warnings.append(f"OCR skipped: {exc}")
             except Exception as exc:
@@ -235,6 +284,7 @@ class MediaIntelligencePipeline:
                     auth_token=os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN"),
                 )
                 result.audio.events.extend(speech_events)
+                completed_features.add("diarization")
             except OptionalFeatureUnavailable as exc:
                 result.warnings.append(f"diarization skipped: {exc}")
             except Exception as exc:
@@ -246,6 +296,7 @@ class MediaIntelligencePipeline:
                 for event in semantic_events:
                     event.end = max(0.001, result.metadata.duration)
                 result.audio.events.extend(semantic_events)
+                completed_features.add("semantic_audio_events")
             except OptionalFeatureUnavailable as exc:
                 result.warnings.append(f"semantic audio analysis skipped: {exc}")
             except Exception as exc:
@@ -253,6 +304,7 @@ class MediaIntelligencePipeline:
 
         if understand_frames and result.scenes:
             provider = self._create_visual_provider(visual_provider)
+            visual_understanding_complete = True
             for scene in result.scenes:
                 frame_paths = [Path(path) for path in scene.frame_paths if Path(path).is_file()]
                 if not frame_paths:
@@ -264,10 +316,15 @@ class MediaIntelligencePipeline:
                 try:
                     apply_visual_result(scene, provider.analyze(frame_paths, transcript_text))
                 except Exception as exc:
+                    visual_understanding_complete = False
                     result.warnings.append(f"visual analysis failed for {scene.scene_id}: {exc}")
+            if visual_understanding_complete:
+                completed_features.add(f"visual_understanding:{visual_provider}")
 
         result.moments = build_editing_moments(result.scenes, result.transcript, result.audio)
+        completed_features.add("moments")
         result.duplicate_take_groups = find_duplicate_takes(result.moments)
+        completed_features.add("duplicates")
         duplicate_ids = {
             candidate.moment_id
             for group in result.duplicate_take_groups
@@ -280,19 +337,60 @@ class MediaIntelligencePipeline:
                     if segment_id in transcript_by_id:
                         transcript_by_id[segment_id].repeated_take = True
 
-        manifest = create_manifest(source, checksum, enabled_features)
+        manifest = create_manifest(source, checksum, sorted(completed_features))
         result.manifest = manifest
-        self._write_outputs(destination, result, enable_embeddings=enable_embeddings)
+        self._rewrite_output_paths(result, working_destination, destination)
+        self._write_outputs(working_destination, result, enable_embeddings=enable_embeddings)
+        self._publish_output_bundle(working_destination, destination)
+        destination_lock.close()
         return result
 
     @staticmethod
     def _create_visual_provider(name: str) -> VisualProvider:
         normalized = name.strip().lower()
-        if normalized in {"qwen", "qwen-local", "local"}:
-            return QwenLocalProvider(os.getenv("RUSHFRAME_QWEN_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct"))
-        if normalized in {"gemini", "cloud"}:
-            return GeminiFrameProvider()
+        if normalized == "groq":
+            return GroqFrameProvider()
+        if normalized == "cloudflare":
+            return CloudflareFrameProvider()
         raise ValueError(f"Unknown visual provider: {name}")
+
+    @staticmethod
+    def _rewrite_output_paths(result: MediaAnalysis, staging: Path, destination: Path) -> None:
+        staging_text = str(staging)
+        destination_text = str(destination)
+        for scene in result.scenes:
+            if scene.frame_path:
+                scene.frame_path = scene.frame_path.replace(staging_text, destination_text, 1)
+            scene.frame_paths = [
+                path.replace(staging_text, destination_text, 1)
+                for path in scene.frame_paths
+            ]
+
+    @staticmethod
+    def _cleanup_stale_staging(destination: Path) -> None:
+        for candidate in destination.parent.glob(f".{destination.name}.staging-*"):
+            if candidate.is_dir():
+                shutil.rmtree(candidate, ignore_errors=True)
+        for candidate in destination.parent.glob(f".{destination.name}.backup-*"):
+            if candidate.is_dir():
+                shutil.rmtree(candidate, ignore_errors=True)
+
+    @staticmethod
+    def _publish_output_bundle(staging: Path, destination: Path) -> None:
+        backup = destination.parent / f".{destination.name}.backup-{uuid.uuid4().hex}"
+        moved_existing = False
+        try:
+            if destination.exists():
+                os.replace(destination, backup)
+                moved_existing = True
+            os.replace(staging, destination)
+        except Exception:
+            if moved_existing and backup.exists() and not destination.exists():
+                os.replace(backup, destination)
+            raise
+        else:
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
 
     @staticmethod
     def _write_outputs(destination: Path, result: MediaAnalysis, *, enable_embeddings: bool) -> None:
@@ -335,7 +433,6 @@ class MediaIntelligencePipeline:
             ("audio-events.json", [asdict(item) for item in result.audio.events]),
             ("moments.json", [asdict(item) for item in result.moments]),
             ("duplicate-takes.json", [asdict(item) for item in result.duplicate_take_groups]),
-            ("manifest.json", asdict(result.manifest) if result.manifest else {}),
         ):
             (destination / filename).write_text(
                 json.dumps(value, ensure_ascii=False, indent=2),
@@ -345,10 +442,25 @@ class MediaIntelligencePipeline:
         index = MediaContextIndex(destination / "context.sqlite")
         try:
             index.rebuild(result.moments, build_embeddings=enable_embeddings)
+            if result.manifest is not None:
+                result.manifest.enabled_features = sorted(set(result.manifest.enabled_features) | {"context_index"})
+                if enable_embeddings:
+                    result.manifest.enabled_features = sorted(set(result.manifest.enabled_features) | {"embeddings"})
         except RuntimeError as exc:
             result.warnings.append(f"embedding index skipped: {exc}")
             index.rebuild(result.moments, build_embeddings=False)
+            if result.manifest is not None:
+                result.manifest.enabled_features = sorted(
+                    (set(result.manifest.enabled_features) | {"context_index"}) - {"embeddings"}
+                )
             (destination / "media-analysis.json").write_text(
                 json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+
+        # Completion metadata is deliberately published last. A bundle without
+        # manifest.json is never treated as a valid cache by the next run.
+        (destination / "manifest.json").write_text(
+            json.dumps(asdict(result.manifest) if result.manifest else {}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )

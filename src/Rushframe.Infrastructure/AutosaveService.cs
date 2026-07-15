@@ -6,7 +6,6 @@ namespace Rushframe.Infrastructure;
 public sealed class AutosaveService
 {
     private readonly string _autosaveDir;
-    private const int MaxKeep = 10;
     private const long MaxTotalBytes = 256L * 1024 * 1024;
     private CancellationTokenSource? _cts;
     private Task? _backgroundTask;
@@ -22,12 +21,20 @@ public sealed class AutosaveService
 
     public string SaveSerialized(ProjectId projectId, string json)
     {
-        var temp = Path.Combine(_autosaveDir, $".{projectId}.tmp");
+        var temp = CreateTemporaryPath(projectId);
         var final = Path.Combine(_autosaveDir, $"{projectId}.autosave");
-        File.WriteAllText(temp, json);
-        File.Move(temp, final, overwrite: true);
-        EnforceRetention();
-        return final;
+        try
+        {
+            File.WriteAllText(temp, json);
+            File.Move(temp, final, overwrite: true);
+            EnforceRetention();
+            return final;
+        }
+        catch
+        {
+            TryDelete(temp);
+            throw;
+        }
     }
 
     public async Task<string> SaveSerializedAsync(
@@ -35,13 +42,13 @@ public sealed class AutosaveService
         string json,
         CancellationToken cancellationToken = default)
     {
-        var temp = Path.Combine(_autosaveDir, $".{projectId}.tmp");
+        var temp = CreateTemporaryPath(projectId);
         var final = Path.Combine(_autosaveDir, $"{projectId}.autosave");
         try
         {
             await using (var stream = new FileStream(
                              temp,
-                             FileMode.Create,
+                             FileMode.CreateNew,
                              FileAccess.Write,
                              FileShare.None,
                              bufferSize: 64 * 1024,
@@ -59,14 +66,7 @@ public sealed class AutosaveService
         }
         catch
         {
-            try
-            {
-                if (File.Exists(temp)) File.Delete(temp);
-            }
-            catch
-            {
-                // Keep the original failure.
-            }
+            TryDelete(temp);
             throw;
         }
     }
@@ -148,6 +148,15 @@ public sealed class AutosaveService
         }
     }
 
+    private string CreateTemporaryPath(ProjectId projectId) =>
+        Path.Combine(_autosaveDir, $".{projectId}.{Guid.NewGuid():N}.tmp");
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { }
+    }
+
     private void EnforceRetention()
     {
         var files = Directory.GetFiles(_autosaveDir, "*.autosave")
@@ -155,11 +164,10 @@ public sealed class AutosaveService
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .ToList();
         long retainedBytes = 0;
-        for (var index = 0; index < files.Count; index++)
+        foreach (var file in files)
         {
-            var file = files[index];
             retainedBytes += file.Length;
-            if (index < MaxKeep && retainedBytes <= MaxTotalBytes) continue;
+            if (retainedBytes <= MaxTotalBytes) continue;
             try { file.Delete(); } catch { }
         }
     }

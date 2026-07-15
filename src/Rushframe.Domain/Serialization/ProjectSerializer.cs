@@ -18,19 +18,32 @@ public static class ProjectSerializer
 
     public static string Serialize(Project project)
     {
-        project.SchemaVersion = Project.CurrentSchemaVersion;
-        project.Workflow.EnsureDefaults();
-        EnsureDefaultVariant(project);
-        EnsureDefaultProviders(project);
-        project.Overview = ProjectOverviewBuilder.Build(project);
-        return JsonSerializer.Serialize(project, Options);
+        ArgumentNullException.ThrowIfNull(project);
+
+        // Persistence normalization must never mutate the live editor model. Build
+        // an isolated in-memory clone first, then apply schema/default/overview
+        // updates only to that clone before producing the final JSON snapshot.
+        var rawJson = JsonSerializer.Serialize(project, Options);
+        var snapshot = JsonSerializer.Deserialize<Project>(rawJson, Options)
+                       ?? throw new InvalidOperationException("Could not clone project for serialization");
+        ProjectInvariantNormalizer.Normalize(snapshot);
+        snapshot.SchemaVersion = Project.CurrentSchemaVersion;
+        snapshot.Workflow.EnsureDefaults();
+        EnsureDefaultVariant(snapshot);
+        EnsureDefaultProviders(snapshot);
+        snapshot.Overview = ProjectOverviewBuilder.Build(snapshot);
+        return JsonSerializer.Serialize(snapshot, Options);
     }
+
+    public static Project CreateSnapshot(Project project) =>
+        Deserialize(Serialize(project));
 
     public static Project Deserialize(string json)
     {
         var migrated = ProjectMigrationPipeline.MigrateToCurrent(json);
         var project = JsonSerializer.Deserialize<Project>(migrated, Options)
                       ?? throw new InvalidOperationException("Deserialized project is null");
+        ProjectInvariantNormalizer.Normalize(project);
         project.SchemaVersion = Project.CurrentSchemaVersion;
         project.Workflow.EnsureDefaults();
         EnsureDefaultVariant(project);

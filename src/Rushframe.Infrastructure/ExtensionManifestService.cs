@@ -66,7 +66,10 @@ public sealed class ExtensionManifestService
             },
             Enabled = true,
         };
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        Directory.CreateDirectory(directory);
+        var entryPoint = Path.Combine(directory, template.EntryPoint!);
+        if (!File.Exists(entryPoint)) File.WriteAllText(entryPoint, "{}\n");
         File.WriteAllText(path, JsonSerializer.Serialize(template, JsonOptions));
     }
 
@@ -81,14 +84,17 @@ public sealed class ExtensionManifestService
             throw new InvalidOperationException("Extension permissions must be unique.");
 
         if (string.IsNullOrWhiteSpace(manifest.EntryPoint)) return;
-        var resolved = Path.GetFullPath(Path.Combine(directory, manifest.EntryPoint));
-        if (!resolved.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(resolved, directory, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Extension entry point escapes its manifest directory.");
-
-        // Entry points are metadata only for now. Requiring a local file prevents remote-code declarations.
         if (Uri.TryCreate(manifest.EntryPoint, UriKind.Absolute, out var uri)
             && uri.Scheme is "http" or "https")
             throw new InvalidOperationException("Remote extension entry points are not permitted.");
+
+        try
+        {
+            manifest.EntryPoint = LocalPhysicalPathGuard.ResolveContainedExistingFile(directory, manifest.EntryPoint);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new InvalidOperationException($"Extension entry point must be a contained local file: {ex.Message}", ex);
+        }
     }
 }

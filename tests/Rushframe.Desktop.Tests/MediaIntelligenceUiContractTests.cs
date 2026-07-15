@@ -16,6 +16,22 @@ public sealed class MediaIntelligenceUiContractTests
     }
 
     [Fact]
+    public void ai_visual_provider_selector_and_settings_support_remote_provider_key_lists()
+    {
+        var xaml = File.ReadAllText(SourcePath("src", "Rushframe.Desktop", "MainWindow.xaml"));
+        var window = File.ReadAllText(SourcePath("src", "Rushframe.Desktop", "MainWindow.xaml.cs"));
+        var media = File.ReadAllText(SourcePath("src", "Rushframe.Desktop", "MainWindow.Media.cs"));
+
+        Assert.Contains("Tag=\"groq\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Tag=\"cloudflare\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tag=\"gemini\"", xaml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("qwen", xaml, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ApiKeyListEditor", window, StringComparison.Ordinal);
+        Assert.Contains("CloudflareCredentialListEditor", window, StringComparison.Ordinal);
+        Assert.Contains("_visualProviderCredentialRotation.TryGetEnvironment", media, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ai_actions_share_selection_state_support_cancel_and_rollback_rejected_apply()
     {
         var media = File.ReadAllText(SourcePath("src", "Rushframe.Desktop", "MainWindow.Media.cs"));

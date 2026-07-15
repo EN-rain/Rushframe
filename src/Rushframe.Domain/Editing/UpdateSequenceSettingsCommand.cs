@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Rushframe.Domain.Editing;
 
-public sealed class UpdateSequenceSettingsCommand : IEditCommand
+public sealed class UpdateSequenceSettingsCommand : IAtomicEditCommand
 {
     public required SequenceId SequenceId { get; init; }
     public required int Width { get; init; }

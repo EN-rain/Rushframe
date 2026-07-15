@@ -6,13 +6,14 @@ namespace Rushframe.Domain.Tests;
 public sealed class ProductionAutomationTests
 {
     [Fact]
-    public void Serialize_adds_schema_three_workflow_and_primary_variant()
+    public void Serialize_adds_current_workflow_brief_and_primary_variant()
     {
         var project = new Project { Name = "Automation" };
 
         var restored = ProjectSerializer.Deserialize(ProjectSerializer.Serialize(project));
 
-        Assert.Equal(3, restored.SchemaVersion);
+        Assert.Equal(Project.CurrentSchemaVersion, restored.SchemaVersion);
+        Assert.NotNull(restored.EditingBrief);
         Assert.Equal("brief", restored.Workflow.ActiveStageId);
         Assert.Equal(7, restored.Workflow.Stages.Count);
         var variant = Assert.Single(restored.ExportVariants);
@@ -94,6 +95,42 @@ public sealed class ProductionAutomationTests
         var restored = Assert.Single(track.Items);
         Assert.Equal(original.Id, restored.Id);
         Assert.Equal(10, restored.Duration.Seconds, 3);
+    }
+
+    [Fact]
+    public void Replace_track_items_removes_dangling_transitions_and_undo_restores_order()
+    {
+        var sequence = new Sequence();
+        var first = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            Duration = MediaTime.FromSeconds(2),
+            SourceDuration = MediaTime.FromSeconds(2),
+        };
+        var second = new TimelineItem
+        {
+            Kind = ItemKind.Clip,
+            TimelineStart = MediaTime.FromSeconds(2),
+            Duration = MediaTime.FromSeconds(2),
+            SourceDuration = MediaTime.FromSeconds(2),
+        };
+        var track = new Track { Kind = TrackKind.Video, Items = { first, second } };
+        sequence.Tracks.Add(track);
+        var transition = new Transition
+        {
+            LeftItemId = first.Id,
+            RightItemId = second.Id,
+            Duration = MediaTime.FromSeconds(0.4),
+        };
+        sequence.Transitions.Add(transition);
+        var replacement = TimelineItemCloner.Clone(first, preserveId: true);
+        var command = new ReplaceTrackItemsCommand { TrackId = track.Id, NewItems = [replacement] };
+
+        Assert.True(command.Execute(sequence).Success);
+        Assert.Empty(sequence.Transitions);
+        Assert.True(command.Undo(sequence).Success);
+        Assert.Same(transition, Assert.Single(sequence.Transitions));
+        Assert.Equal([first.Id, second.Id], track.Items.Select(item => item.Id));
     }
 
     [Fact]

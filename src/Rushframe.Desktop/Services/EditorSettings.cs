@@ -13,8 +13,16 @@ public sealed class EditorSettings
     public int AutosaveIntervalSeconds { get; set; } = 30;
     public bool StartIntelligenceBackend { get; set; } = true;
     public int IntelligenceBackendPort { get; set; } = 7319;
-    public string ProtectedGeminiApiKey { get; set; } = string.Empty;
+    public List<string> ProtectedGroqApiKeys { get; set; } = [];
+    public List<ProtectedCloudflareCredential> ProtectedCloudflareCredentials { get; set; } = [];
+    public Dictionary<string, int> AiProviderRotationCursors { get; set; } = [];
     public int MaxAiInputSeconds { get; set; } = 900;
     public int MaxOutputDurationSeconds { get; set; } = 180;
     public Dictionary<string, string> Keybindings { get; set; } = [];
+}
+
+public sealed class ProtectedCloudflareCredential
+{
+    public string ProtectedAccountId { get; set; } = string.Empty;
+    public string ProtectedApiToken { get; set; } = string.Empty;
 }

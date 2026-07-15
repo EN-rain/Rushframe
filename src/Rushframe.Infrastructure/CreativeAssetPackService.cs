@@ -98,18 +98,24 @@ public sealed class CreativeAssetPackService
             if (string.IsNullOrWhiteSpace(asset.LocalPath))
                 throw new InvalidOperationException($"Asset {asset.Id} requires a localPath.");
 
-            var resolved = Path.GetFullPath(Path.Combine(packDirectory, asset.LocalPath));
-            if (!resolved.StartsWith(packDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"Asset {asset.Id} escapes its pack directory.");
-            if (!File.Exists(resolved))
-                throw new FileNotFoundException($"Asset file for {asset.Id} was not found.", resolved);
-            asset.LocalPath = resolved;
+            try
+            {
+                asset.LocalPath = LocalPhysicalPathGuard.ResolveContainedExistingFile(packDirectory, asset.LocalPath);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
+            {
+                throw new InvalidOperationException($"Asset {asset.Id} is not a contained local file: {ex.Message}", ex);
+            }
             if (!string.IsNullOrWhiteSpace(asset.PreviewPath))
             {
-                var preview = Path.GetFullPath(Path.Combine(packDirectory, asset.PreviewPath));
-                if (!preview.StartsWith(packDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException($"Preview for {asset.Id} escapes its pack directory.");
-                asset.PreviewPath = preview;
+                try
+                {
+                    asset.PreviewPath = LocalPhysicalPathGuard.ResolveContainedExistingFile(packDirectory, asset.PreviewPath);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
+                {
+                    throw new InvalidOperationException($"Preview for {asset.Id} is not a contained local file: {ex.Message}", ex);
+                }
             }
             if (manifest.RequiresAttribution && string.IsNullOrWhiteSpace(asset.Attribution))
                 throw new InvalidOperationException($"Asset {asset.Id} requires attribution metadata.");

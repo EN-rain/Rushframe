@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Rushframe.Domain;
 using Rushframe.Domain.Editing;
+using Rushframe.Domain.Serialization;
 
 namespace Rushframe.Desktop.Controllers;
 
@@ -12,10 +13,15 @@ internal sealed record AgentEditPlanCompilation(
     IReadOnlyList<AgentEditOperationRecord> Operations,
     IReadOnlyList<AgentAffectedRange> AffectedRanges,
     IReadOnlyList<string> Warnings,
+    AgentCreativePlan CreativePlan,
+    AgentPlanQualityScores QualityScores,
+    IReadOnlyList<TimelineQualityIssue> QualityIssues,
+    string PromptId,
+    string PromptVersion,
     string? Error)
 {
     public static AgentEditPlanCompilation Fail(string planId, string error) =>
-        new(false, planId, string.Empty, null, [], [], [], error);
+        new(false, planId, string.Empty, null, [], [], [], new(), new(), [], "rushframe-editing-agent", "1.0", error);
 }
 
 /// <summary>
@@ -90,6 +96,18 @@ internal sealed class AgentEditPlanCompiler
                 : $"Apply {records.Count} coordinated timeline edits";
         }
 
+        var creativePlan = ReadCreativePlan(payload);
+        var projectionError = TryProjectPlan(project, sequence, operationsElement, playheadSeconds, out var projectedProject, out var projectedSequence);
+        if (projectionError != null)
+            return AgentEditPlanCompilation.Fail(planId, $"The proposed operation sequence cannot be applied atomically: {projectionError}");
+        var qualityIssues = TimelineQualityAnalyzer.Analyze(projectedProject, projectedSequence);
+        if (creativePlan.Beats.Count == 0)
+            warnings.Add("The plan has no creative beat sheet; narrative intent cannot be reviewed before application.");
+        warnings.AddRange(qualityIssues.Where(issue => issue.Severity != TimelineQualitySeverity.Info).Select(issue => issue.Message));
+        var qualityScores = ScorePlan(projectedProject, creativePlan, records, qualityIssues);
+        var promptId = AgentPayloadReader.ReadString(payload, "prompt_id") ?? "rushframe-editing-agent";
+        var promptVersion = AgentPayloadReader.ReadString(payload, "prompt_version") ?? "1.0";
+
         DeduplicateRanges(affectedRanges);
         DeduplicateStrings(warnings);
         return new AgentEditPlanCompilation(
@@ -100,7 +118,51 @@ internal sealed class AgentEditPlanCompiler
             records,
             affectedRanges,
             warnings,
+            creativePlan,
+            qualityScores,
+            qualityIssues,
+            promptId,
+            promptVersion,
             null);
+    }
+
+    private string? TryProjectPlan(
+        Project project,
+        Sequence sequence,
+        JsonElement operations,
+        double playheadSeconds,
+        out Project projectedProject,
+        out Sequence projectedSequence)
+    {
+        try
+        {
+            projectedProject = ProjectSerializer.CreateSnapshot(project);
+            projectedSequence = projectedProject.Sequences.FirstOrDefault(candidate => candidate.Id == sequence.Id)
+                                ?? throw new InvalidOperationException("The active sequence was not present in the plan projection snapshot.");
+
+            var index = 0;
+            foreach (var operation in operations.EnumerateArray())
+            {
+                index++;
+                var action = AgentPayloadReader.ReadRequiredString(operation, "action");
+                var protectionError = ValidateProtection(projectedSequence, operation, action);
+                if (protectionError != null) return $"Operation {index}: {protectionError}";
+                var build = _factory.Build(projectedProject, projectedSequence, operation, action, playheadSeconds);
+                if (!build.Success || build.Command == null)
+                    return $"Operation {index} ({action}) failed projected validation: {build.Error}";
+                var result = build.Command.Execute(projectedSequence);
+                if (!result.Success)
+                    return $"Operation {index} ({action}) failed projected execution: {result.ErrorMessage ?? "Edit failed"}";
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            projectedProject = null!;
+            projectedSequence = null!;
+            return $"Projection failed: {ex.Message}";
+        }
     }
 
     private static string? ValidateProtection(Sequence sequence, JsonElement operation, string action)
@@ -124,7 +186,7 @@ internal sealed class AgentEditPlanCompiler
         {
             var track = sequence.Tracks.FirstOrDefault(candidate => candidate.Id == new TrackId(trackGuid));
             if (track?.Locked == true
-                && action is not ("toggle_track_lock" or "rename_track" or "reorder_track"))
+                && !action.Equals("toggle_track_lock", StringComparison.OrdinalIgnoreCase))
                 return "Target track is locked";
         }
 
@@ -219,6 +281,67 @@ internal sealed class AgentEditPlanCompiler
                     warnings.Add($"Visual operation '{action}' targets an audio source; verify the item is not audio-only.");
             }
         }
+    }
+
+    private static AgentCreativePlan ReadCreativePlan(JsonElement payload)
+    {
+        var plan = new AgentCreativePlan();
+        if (!AgentPayloadReader.TryGetProperty(payload, "creative_plan", out var element) || element.ValueKind != JsonValueKind.Object)
+            return plan;
+        plan.Objective = AgentPayloadReader.ReadString(element, "objective") ?? string.Empty;
+        plan.TargetDurationSeconds = AgentPayloadReader.HasProperty(element, "target_duration")
+            ? AgentPayloadReader.ReadSeconds(element, "target_duration", 0)
+            : null;
+        plan.PacingStrategy = AgentPayloadReader.ReadString(element, "pacing_strategy") ?? string.Empty;
+        plan.AudioStrategy = AgentPayloadReader.ReadString(element, "audio_strategy") ?? string.Empty;
+        plan.CaptionStrategy = AgentPayloadReader.ReadString(element, "caption_strategy") ?? string.Empty;
+        if (AgentPayloadReader.TryGetProperty(element, "assumptions", out var assumptions) && assumptions.ValueKind == JsonValueKind.Array)
+            plan.Assumptions.AddRange(assumptions.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.String).Select(value => value.GetString()!).Where(value => !string.IsNullOrWhiteSpace(value)));
+        if (AgentPayloadReader.TryGetProperty(element, "beats", out var beats) && beats.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var value in beats.EnumerateArray())
+            {
+                if (value.ValueKind != JsonValueKind.Object) continue;
+                var beat = new AgentEditBeat
+                {
+                    Id = AgentPayloadReader.ReadString(value, "id") ?? Guid.NewGuid().ToString("N"),
+                    Role = AgentPayloadReader.ReadString(value, "role") ?? string.Empty,
+                    StartSeconds = Math.Max(0, AgentPayloadReader.ReadSeconds(value, "start", 0)),
+                    EndSeconds = Math.Max(0, AgentPayloadReader.ReadSeconds(value, "end", 0)),
+                    Message = AgentPayloadReader.ReadString(value, "message") ?? string.Empty,
+                    Reason = AgentPayloadReader.ReadString(value, "reason") ?? string.Empty,
+                };
+                if (AgentPayloadReader.TryGetProperty(value, "moment_ids", out var moments) && moments.ValueKind == JsonValueKind.Array)
+                    beat.MomentIds.AddRange(moments.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!));
+                if (AgentPayloadReader.TryGetProperty(value, "media_asset_ids", out var assets) && assets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var asset in assets.EnumerateArray())
+                        if (asset.ValueKind == JsonValueKind.String && Guid.TryParse(asset.GetString(), out var id)) beat.MediaAssetIds.Add(new MediaAssetId(id));
+                }
+                plan.Beats.Add(beat);
+            }
+        }
+        return plan;
+    }
+
+    private static AgentPlanQualityScores ScorePlan(Project project, AgentCreativePlan plan, IReadOnlyCollection<AgentEditOperationRecord> records, IReadOnlyCollection<TimelineQualityIssue> issues)
+    {
+        static double Clamp(double value) => Math.Round(Math.Clamp(value, 0, 1), 3);
+        var errors = issues.Count(issue => issue.Severity == TimelineQualitySeverity.Error);
+        var warnings = issues.Count(issue => issue.Severity == TimelineQualitySeverity.Warning);
+        var briefFilled = new[] { project.EditingBrief.Purpose, project.EditingBrief.TargetAudience, project.EditingBrief.Platform, project.EditingBrief.Tone }.Count(value => !string.IsNullOrWhiteSpace(value));
+        return new AgentPlanQualityScores
+        {
+            BriefCompliance = Clamp(0.35 + briefFilled * 0.12 + (plan.TargetDurationSeconds.HasValue ? 0.12 : 0)),
+            NarrativeCompleteness = Clamp(plan.Beats.Count == 0 ? 0.2 : 0.55 + Math.Min(0.4, plan.Beats.Count * 0.08)),
+            Continuity = Clamp(1 - warnings * 0.05 - errors * 0.2),
+            Pacing = Clamp(string.IsNullOrWhiteSpace(plan.PacingStrategy) ? 0.4 : 0.8),
+            DialogueQuality = Clamp(records.Any(record => record.Action.Contains("transcript", StringComparison.OrdinalIgnoreCase)) ? 0.75 : 0.6),
+            AudioQuality = Clamp(string.IsNullOrWhiteSpace(plan.AudioStrategy) ? 0.45 : 0.8),
+            CaptionQuality = Clamp(string.IsNullOrWhiteSpace(plan.CaptionStrategy) ? 0.5 : 0.82),
+            AssetValidity = Clamp(errors == 0 ? 1 : 1 - errors * 0.25),
+            TechnicalValidity = 1,
+        };
     }
 
     private static void DeduplicateRanges(List<AgentAffectedRange> ranges)

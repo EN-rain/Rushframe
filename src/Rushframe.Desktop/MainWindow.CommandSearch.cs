@@ -76,7 +76,7 @@ public partial class MainWindow
         AddFunction("Toggle Preview Fullscreen", "Preview", "fullscreen monitor", TogglePreviewFullscreen, () => PreviewFullscreenButton.IsEnabled);
         AddFunction("Canvas & Layout Guides", "Preview", "resolution aspect frame rate background tiktok reels shorts grid safe area", OpenCanvasSettings);
 
-        AddFunction("Add Selected Media to Timeline", "Media", "place selected asset at playhead", AddSelectedMediaToTimeline, () => AddToTimelineButton.IsEnabled);
+        AddFunction("Add Selected Media to Timeline", "Media", "place selected asset at playhead", async () => await AddSelectedMediaToTimelineAsync(), () => AddToTimelineButton.IsEnabled);
         AddFunction("Preview Selected Media", "Media", "open selected asset in source monitor", PreviewSelectedMedia, () => PreviewSelectedMediaButton.IsEnabled);
         AddFunction("Creative Asset Library", "Media", "licensed local stickers shapes fonts sounds music extensions packs", async () => await ShowCreativeAssetsAsync());
         AddFunction("Run AI Analysis", "AI", "media intelligence analyze selected media scenes transcript hooks", async () => await RunMediaIntelligenceAsync(), () => RunMediaIntelligenceButton.IsEnabled);

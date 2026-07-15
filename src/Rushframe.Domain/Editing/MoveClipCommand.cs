@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class MoveClipCommand : IEditCommand
+public sealed class MoveClipCommand : IAtomicEditCommand
 {
     public string Description => $"Move clip {ItemId}";
 
@@ -18,6 +18,9 @@ public sealed class MoveClipCommand : IEditCommand
 
     public EditResult Execute(Sequence sequence)
     {
+        if (NewTimelineStart is { Seconds: < 0 })
+            return EditResult.Fail("Timeline start cannot be negative");
+        _rippledItems.Clear();
         foreach (var track in sequence.Tracks)
         {
             var idx = track.Items.FindIndex(i => i.Id == ItemId);
@@ -48,17 +51,22 @@ public sealed class MoveClipCommand : IEditCommand
                         $"Cannot move {item.Kind} item to {destTrack.Kind} track"));
             }
 
-            var moveStart = NewTimelineStart ?? _oldStart;
-            var gapDuration = _oldDuration;
-
+            var rippleCandidates = new List<TimelineItem>();
             if (Ripple.Enabled && NewTimelineStart.HasValue)
             {
                 var gapEnd = _oldStart.Add(_oldDuration);
-                foreach (var rippled in track.Items.Where(i => i.TimelineStart >= gapEnd).OrderBy(i => i.TimelineStart.Seconds))
-                {
-                    _rippledItems.Add((rippled, rippled.TimelineStart));
-                    rippled.TimelineStart = rippled.TimelineStart.Subtract(gapDuration);
-                }
+                rippleCandidates = track.Items
+                    .Where(candidate => candidate.Id != item.Id && candidate.TimelineStart >= gapEnd)
+                    .OrderBy(candidate => candidate.TimelineStart.Seconds)
+                    .ToList();
+                if (rippleCandidates.Any(candidate => candidate.Locked))
+                    return EditResult.Fail("A downstream item is locked");
+            }
+
+            foreach (var rippled in rippleCandidates)
+            {
+                _rippledItems.Add((rippled, rippled.TimelineStart));
+                rippled.TimelineStart = rippled.TimelineStart.Subtract(_oldDuration);
             }
 
             track.Items.RemoveAt(idx);
@@ -88,26 +96,19 @@ public sealed class MoveClipCommand : IEditCommand
 
     public EditResult Undo(Sequence sequence)
     {
+        var currentTrack = sequence.Tracks.FirstOrDefault(track => track.Items.Any(item => item.Id == ItemId));
+        var sourceTrack = sequence.Tracks.FirstOrDefault(track => track.Id == _sourceTrackId);
+        if (currentTrack == null) return EditResult.Fail("Item not found");
+        if (sourceTrack == null) return EditResult.Fail("Source track not found");
+        var itemIndex = currentTrack.Items.FindIndex(item => item.Id == ItemId);
+        var item = currentTrack.Items[itemIndex];
+
         foreach (var (rippled, oldStart) in _rippledItems)
             rippled.TimelineStart = oldStart;
         _rippledItems.Clear();
-
-        foreach (var track in sequence.Tracks)
-        {
-            var idx = track.Items.FindIndex(i => i.Id == ItemId);
-            if (idx < 0) continue;
-
-            var item = track.Items[idx];
-            track.Items.RemoveAt(idx);
-
-            var sourceTrack = sequence.Tracks.FirstOrDefault(t => t.Id == _sourceTrackId);
-            if (sourceTrack == null) return EditResult.Fail("Source track not found");
-
-            item.TimelineStart = _oldStart;
-            sourceTrack.Items.Insert(Math.Min(_oldIndex, sourceTrack.Items.Count), item);
-            return EditResult.Ok();
-        }
-
-        return EditResult.Fail("Item not found");
+        currentTrack.Items.RemoveAt(itemIndex);
+        item.TimelineStart = _oldStart;
+        sourceTrack.Items.Insert(Math.Min(_oldIndex, sourceTrack.Items.Count), item);
+        return EditResult.Ok();
     }
 }

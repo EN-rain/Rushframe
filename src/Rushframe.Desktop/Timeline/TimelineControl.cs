@@ -138,6 +138,7 @@ public sealed partial class TimelineControl : FrameworkElement
     {
         ClipToBounds = true;
         SnapsToDevicePixels = true;
+        AllowDrop = true;
         _viewport.TrackHeaderWidth = 190;
         _viewport.TrackHeight = 46;
         _viewport.RulerHeight = 48;

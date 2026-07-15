@@ -144,6 +144,90 @@ public sealed class MediaIntelligenceImportServiceTests
     }
 
     [Fact]
+    public async Task import_accepts_null_optional_numbers_from_pipeline_output()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"media-analysis-null-numbers-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, """
+        {
+          "source_path": "sample.mp4",
+          "schema_version": "2.0",
+          "analysis_version": 2,
+          "metadata": {
+            "duration": 4.0,
+            "width": 1280,
+            "height": 720,
+            "fps": null,
+            "bit_rate": null,
+            "variable_frame_rate": null,
+            "has_video": true,
+            "has_audio": true
+          },
+          "scenes": [
+            {
+              "scene_id": "scene_0001",
+              "start": -0.033333,
+              "end": 4,
+              "visual_energy": null,
+              "confidence": null,
+              "quality": { "visual_quality": null, "audio_clarity": null }
+            }
+          ],
+          "audio": {
+            "integrated_loudness_lufs": -17.4,
+            "true_peak_db": null,
+            "events": [
+              {
+                "event_id": "silence_0001",
+                "start": 1.0,
+                "end": 1.5,
+                "event_type": "silence",
+                "confidence": 1.0,
+                "clarity": null
+              }
+            ],
+            "music": {
+              "tempo_bpm": null,
+              "beat_times": [0.5, null, "invalid", 1.5],
+              "energy": null
+            }
+          },
+          "moments": [
+            {
+              "moment_id": "moment_0001",
+              "start": -0.033333,
+              "end": 4,
+              "summary": "Sample",
+              "confidence": null,
+              "scores": { "overall": null }
+            }
+          ]
+        }
+        """);
+
+        try
+        {
+            var asset = new MediaAsset { Kind = MediaKind.Video, OriginalPath = "sample.mp4" };
+            var analysis = await new MediaIntelligenceImportService().ImportAsync(path, asset);
+
+            Assert.Null(analysis.Metadata.FramesPerSecond);
+            Assert.Null(analysis.Metadata.BitRate);
+            Assert.Equal(0, analysis.Scenes[0].Start.Seconds);
+            Assert.Null(analysis.Scenes[0].VisualEnergy);
+            Assert.Null(analysis.Audio.TruePeakDb);
+            Assert.Null(analysis.Audio.Events[0].Clarity);
+            Assert.Equal([0.5, 1.5], analysis.Audio.Music!.BeatTimes);
+            Assert.Equal(0, analysis.Moments[0].Start.Seconds);
+            Assert.Equal(0, analysis.Moments[0].Confidence);
+            Assert.Equal(0, analysis.Moments[0].Scores.Overall);
+            Assert.Empty(analysis.Warnings);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void store_in_project_replaces_analysis_for_same_asset()
     {
         var project = new Project();

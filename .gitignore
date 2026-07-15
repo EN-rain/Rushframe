@@ -53,12 +53,20 @@ packages/
 .devspace-run/
 .playwright-mcp/
 .tools/
+.serena/memories/
+
+# Local test artifacts
+/%TEMP%/
+/NUL
+qa testing/manual review/batman-ai-five-edits/current-run/analysis-*/
 
 # Legacy Python files (not part of .NET desktop app)
 __pycache__/
+**/__pycache__/
 *.egg-info/
 *.pyc
 *.pyo
+**/*.py[cod]
 run.py
 pyproject.toml
 orchestrator/

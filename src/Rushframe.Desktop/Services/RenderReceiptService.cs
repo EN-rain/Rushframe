@@ -103,24 +103,33 @@ public sealed class RenderReceiptService
         await File.WriteAllTextAsync(temporaryPath, JsonSerializer.Serialize(receipt, JsonOptions), cancellationToken);
         File.Move(temporaryPath, receiptPath, overwrite: true);
 
+        return receipt;
+    }
+
+    public static void ApplyToProject(Project project, RenderReceiptDocument receipt)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(receipt);
+
+        project.RenderReceipts.RemoveAll(candidate => candidate.ReceiptId == receipt.ReceiptId);
         project.RenderReceipts.Add(new RenderReceiptReference
         {
             ReceiptId = receipt.ReceiptId,
-            OutputPath = Path.GetFullPath(outputPath),
-            ReceiptPath = Path.GetFullPath(receiptPath),
-            VariantId = variantId,
-            ProjectRevision = project.Revision,
-            OutputSha256 = outputHash,
+            OutputPath = receipt.Output.Path,
+            ReceiptPath = receipt.ReceiptPath,
+            VariantId = receipt.VariantId,
+            ProjectRevision = receipt.ProjectRevision,
+            OutputSha256 = receipt.Output.Sha256,
             VerificationStatus = receipt.Status,
             CreatedUtc = receipt.CreatedUtc,
         });
-        if (!string.IsNullOrWhiteSpace(variantId))
+        if (!string.IsNullOrWhiteSpace(receipt.VariantId))
         {
-            var variant = project.ExportVariants.FirstOrDefault(candidate => candidate.Id == variantId);
+            var variant = project.ExportVariants.FirstOrDefault(candidate => candidate.Id == receipt.VariantId);
             if (variant != null)
             {
-                variant.LastOutputPath = Path.GetFullPath(outputPath);
-                variant.LastReceiptPath = Path.GetFullPath(receiptPath);
+                variant.LastOutputPath = receipt.Output.Path;
+                variant.LastReceiptPath = receipt.ReceiptPath;
                 variant.LastRenderedUtc = receipt.CreatedUtc;
                 variant.Status = receipt.Status == RenderVerificationStatus.Failed
                     ? ExportVariantStatus.Failed
@@ -128,7 +137,6 @@ public sealed class RenderReceiptService
             }
         }
         UpdateWorkflow(project, receipt);
-        return receipt;
     }
 
     private static IReadOnlyList<double> BuildEvidenceTimestamps(Sequence sequence)
@@ -180,6 +188,8 @@ public sealed class RenderReceiptService
         if (export != null)
         {
             export.StartedUtc ??= receipt.CreatedUtc;
+            export.ApprovedUtc ??= receipt.CreatedUtc;
+            export.ApprovedBy ??= receipt.ApprovalSource;
             export.CompletedUtc = receipt.CreatedUtc;
             export.Status = receipt.Status == RenderVerificationStatus.Failed
                 ? ProductionStageStatus.Failed

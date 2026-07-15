@@ -8,6 +8,7 @@ import math
 import re
 import sqlite3
 from array import array
+from contextlib import contextmanager
 from functools import lru_cache
 from threading import Lock
 from typing import Any
@@ -54,9 +55,18 @@ class MediaContextIndex:
         connection.execute("PRAGMA synchronous=NORMAL")
         return connection
 
+    @contextmanager
+    def _connection(self):
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def rebuild(self, moments: Iterable[EditingMoment], *, build_embeddings: bool = False) -> None:
         moment_list = list(moments)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript(
                 """
                 DROP TABLE IF EXISTS moments;
@@ -240,7 +250,7 @@ class MediaContextIndex:
             ORDER BY rank ASC, m.overall_score DESC
             LIMIT ?
         """
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(sql, parameters).fetchall()
         results = [self._row_to_result(row, score=_bm25_score(float(row["rank"]))) for row in rows]
         return _filter_roles(results, roles)
@@ -254,7 +264,7 @@ class MediaContextIndex:
         min_overall_score: float,
         max_duration: float | None,
     ) -> list[SearchResult]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             count = connection.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
             if not count:
                 return []
@@ -314,7 +324,7 @@ class MediaContextIndex:
         roles: list[str] | None = None,
         min_overall_score: float = 0.0,
     ) -> list[SearchResult]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM moments WHERE overall_score >= ? ORDER BY overall_score DESC LIMIT ?",
                 (min_overall_score, max(limit * 3, 30)),

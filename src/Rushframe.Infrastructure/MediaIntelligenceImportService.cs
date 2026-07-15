@@ -54,6 +54,8 @@ public sealed class MediaIntelligenceImportService
     {
         project.MediaIntelligence.RemoveAll(existing => existing.MediaAssetId == analysis.MediaAssetId);
         project.MediaIntelligence.Add(analysis);
+        project.MediaRelationships.Clear();
+        project.MediaRelationships.AddRange(MediaRelationshipBuilder.Build(project.MediaIntelligence));
     }
 
     private static MediaIntelligenceTechnicalMetadata ReadMetadata(JsonElement root)
@@ -85,6 +87,7 @@ public sealed class MediaIntelligenceImportService
         {
             var start = ReadDouble(source, "start");
             var end = ReadDouble(source, "end");
+            start = NormalizeRangeStart(start, end);
             var sceneId = ReadString(source, "scene_id") ?? string.Empty;
             if (!IsValidRange(start, end))
             {
@@ -142,6 +145,7 @@ public sealed class MediaIntelligenceImportService
             index++;
             var start = ReadDouble(source, "start");
             var end = ReadDouble(source, "end");
+            start = NormalizeRangeStart(start, end);
             var text = ReadString(source, "text");
             if (!IsValidRange(start, end) || string.IsNullOrWhiteSpace(text))
             {
@@ -179,6 +183,7 @@ public sealed class MediaIntelligenceImportService
             var text = ReadString(word, "text") ?? ReadString(word, "word");
             if (!double.IsFinite(start)) start = fallbackStart;
             if (!double.IsFinite(end)) end = fallbackEnd;
+            start = NormalizeRangeStart(start, end);
             if (end < start || string.IsNullOrWhiteSpace(text)) continue;
             result.Add(new MediaIntelligenceWord
             {
@@ -216,11 +221,16 @@ public sealed class MediaIntelligenceImportService
     {
         if (!audio.TryGetProperty("silence", out var ranges) || ranges.ValueKind != JsonValueKind.Array) return [];
         return ranges.EnumerateArray()
-            .Select(source => new
+            .Select(source =>
             {
-                Start = ReadDouble(source, "start"),
-                End = ReadDouble(source, "end"),
-                Duration = ReadDouble(source, "duration"),
+                var start = ReadDouble(source, "start");
+                var end = ReadDouble(source, "end");
+                return new
+                {
+                    Start = NormalizeRangeStart(start, end),
+                    End = end,
+                    Duration = ReadDouble(source, "duration"),
+                };
             })
             .Where(value => IsValidRange(value.Start, value.End))
             .Select(value => new MediaIntelligenceSilenceRange
@@ -242,6 +252,7 @@ public sealed class MediaIntelligenceImportService
         {
             var start = ReadDouble(source, "start");
             var end = ReadDouble(source, "end");
+            start = NormalizeRangeStart(start, end);
             if (!IsValidRange(start, end)) continue;
             result.Add(new MediaIntelligenceAudioEvent
             {
@@ -277,6 +288,7 @@ public sealed class MediaIntelligenceImportService
         {
             var start = ReadDouble(source, "start");
             var end = ReadDouble(source, "end");
+            start = NormalizeRangeStart(start, end);
             if (!IsValidRange(start, end))
             {
                 analysis.Warnings.Add("Skipped an editing moment because its time range is invalid.");
@@ -347,6 +359,11 @@ public sealed class MediaIntelligenceImportService
         }
     }
 
+    private static double NormalizeRangeStart(double start, double end) =>
+        double.IsFinite(start) && start < 0 && double.IsFinite(end) && end > 0
+            ? 0
+            : start;
+
     private static bool IsValidRange(double start, double end) =>
         double.IsFinite(start) && double.IsFinite(end) && start >= 0 && end > start;
 
@@ -359,22 +376,30 @@ public sealed class MediaIntelligenceImportService
             : null;
 
     private static double ReadDouble(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.TryGetDouble(out var result)
+        parent.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetDouble(out var result)
             ? result
             : double.NaN;
 
     private static double? ReadNullableDouble(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.TryGetDouble(out var result)
+        parent.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetDouble(out var result)
             ? result
             : null;
 
     private static int? ReadInt(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.TryGetInt32(out var result)
+        parent.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out var result)
             ? result
             : null;
 
     private static long? ReadLong(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.TryGetInt64(out var result)
+        parent.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt64(out var result)
             ? result
             : null;
 
@@ -404,6 +429,7 @@ public sealed class MediaIntelligenceImportService
     {
         if (!parent.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Array) return [];
         return value.EnumerateArray()
+            .Where(element => element.ValueKind == JsonValueKind.Number)
             .Select(element => element.TryGetDouble(out var result) ? result : double.NaN)
             .Where(double.IsFinite)
             .ToList();

@@ -1,6 +1,6 @@
 namespace Rushframe.Domain.Editing;
 
-public sealed class UpdateAnimationChannelsCommand : IEditCommand
+public sealed class UpdateAnimationChannelsCommand : IAtomicEditCommand
 {
     public required TimelineItemId ItemId { get; init; }
     public required IReadOnlyList<AnimationChannel> NewChannels { get; init; }
@@ -18,9 +18,10 @@ public sealed class UpdateAnimationChannelsCommand : IEditCommand
         if (track!.Locked) return EditResult.Fail("Track is locked");
         if (item.Locked) return EditResult.Fail("Item is locked");
 
+        var replacementChannels = Clone(NewChannels);
         _oldChannels = Clone(item.AnimationChannels);
         item.AnimationChannels.Clear();
-        item.AnimationChannels.AddRange(Clone(NewChannels));
+        item.AnimationChannels.AddRange(replacementChannels);
         item.InvalidateAnimationChannelCache();
         return EditResult.Ok();
     }

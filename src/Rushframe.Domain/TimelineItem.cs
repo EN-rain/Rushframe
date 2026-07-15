@@ -2,6 +2,23 @@ namespace Rushframe.Domain;
 
 public enum ItemKind { Clip, Text, Image, Sticker, AdjustmentLayer }
 
+public enum ItemTransitionKind
+{
+    None,
+    Fade,
+    SlideLeft,
+    SlideRight,
+    SlideUp,
+    SlideDown,
+    ZoomIn,
+    ZoomOut,
+    Pop,
+    SpinClockwise,
+    SpinCounterClockwise,
+    WipeLeft,
+    WipeRight,
+}
+
 public sealed class TimelineItem
 {
     private static long _globalTimingMutationVersion;
@@ -60,6 +77,10 @@ public sealed class TimelineItem
 
     public MediaTime FadeInDuration { get; set; }
     public MediaTime FadeOutDuration { get; set; }
+    public ItemTransitionKind VisualTransitionIn { get; set; }
+    public MediaTime VisualTransitionInDuration { get; set; }
+    public ItemTransitionKind VisualTransitionOut { get; set; }
+    public MediaTime VisualTransitionOutDuration { get; set; }
     public double Pan { get; set; }
     public double CropLeft { get; set; }
     public double CropTop { get; set; }

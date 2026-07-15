@@ -34,11 +34,17 @@ def detect_scenes(video_path: Path | str, threshold: float = 27.0) -> list[Scene
         show_progress=False,
         start_in_scene=True,
     )
-    return [
-        SceneAnalysis(
-            scene_id=f"scene_{index:04d}",
-            start=start.get_seconds(),
-            end=end.get_seconds(),
+    result: list[SceneAnalysis] = []
+    for index, (start, end) in enumerate(scenes, start=1):
+        start_seconds = max(0.0, start.get_seconds())
+        end_seconds = max(start_seconds, end.get_seconds())
+        if end_seconds <= start_seconds:
+            continue
+        result.append(
+            SceneAnalysis(
+                scene_id=f"scene_{index:04d}",
+                start=start_seconds,
+                end=end_seconds,
+            )
         )
-        for index, (start, end) in enumerate(scenes, start=1)
-    ]
+    return result

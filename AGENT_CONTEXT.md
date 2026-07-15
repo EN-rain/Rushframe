@@ -50,6 +50,7 @@ Responsibilities:
 - Workspace panels, layout, and settings
 - Python intelligence backend startup
 - Local agent bridge, approval flow, and audit log
+- Cross-project local sound catalog, watched folders, semantic-capable search, project registration, waveform audition, and license guardrails
 
 Important files:
 
@@ -69,8 +70,13 @@ Important files:
 - `MainWindow.PreviewInteraction.cs` — direct preview transform handles and snapping
 - `MainWindow.Canvas.cs` — canvas backgrounds, rational FPS, and social safe-area guides
 - `MainWindow.Assets.cs` — local licensed asset packs and reviewed extension manifests
+- `MainWindow.SoundLibrary.cs` and `Dialogs/SoundLibraryWindow.cs` — durable sound catalog UI, explicit project registration, collections, license metadata, and timeline placement
+- `Services/SoundLibraryCatalogService.cs` and `Services/SoundLibraryWatchService.cs` — bounded Python worker calls and watched-folder reindexing
 - `Controllers/ExportController.cs` — export workflow
 - `Controllers/AgentEditCommandFactory.cs` — translates approved agent requests into edit commands
+- `Controllers/AgentEditSkillCatalog.cs` — authoritative machine-readable action contracts, parameters, preconditions, and warnings
+- `Controllers/AgentEditingContextBuilder.cs` — bounded path-safe campaign/timeline/media context used before edit planning
+- `Controllers/AgentEditPlanCompiler.cs` — validates and projects atomic multi-operation plans before approval/application
 - `Services/LocalAgentBridgeService.cs` — local bridge for external agents
 - `Services/IntelligenceBackendService.cs` — Python backend process integration
 - `Services/ProjectSaveCoordinator.cs` — mutation-aware, revision-coalesced, off-thread project snapshot and save pipeline
@@ -193,6 +199,7 @@ Entry points:
 - `worker.py` — worker process behavior
 - `backend.py` — local backend/API behavior
 - `pipeline.py` — full analysis orchestration
+- `sound_library.py` — durable SQLite sound catalog, local metadata/embedding ingest, bounded search, collections, and usage state
 
 Pipeline stages/components:
 
@@ -213,6 +220,7 @@ Pipeline stages/components:
 - JSON serialization
 - cache manifests
 - SQLite media-context indexing and search
+- cross-project sound-library indexing, waveform generation, optional local CLAP/Essentia analysis, and controlled MCP search
 
 Important constraints:
 
@@ -221,6 +229,8 @@ Important constraints:
 - Failures should become warnings where partial analysis remains useful.
 - Outputs are versioned and cached.
 - The pipeline limits analysis duration and can create a clipped analysis input.
+- The sound catalog indexes only user-approved local files/roots, rejects UNC roots, never downloads sounds or CLAP weights, and exposes no raw paths through MCP.
+- Catalog-only sound results must be explicitly registered in the open project before an agent or timeline edit may use them.
 
 See `rushframe_intelligence/README.md` for CLI and dependency details.
 
@@ -335,7 +345,7 @@ Use this routing before searching broadly:
 - Preview behavior: `MainWindow.Preview.cs`, `MainWindow.RealtimePreview.cs`, and `MainWindow.PreviewInteraction.cs`
 - Inspector/effects/color/stabilization: `MainWindow.Inspector.cs`, domain effect types, `EffectRegistry`
 - Export/render: `ExportController.cs`, `FfmpegMediaService.cs`, export dialog
-- Agent editing: `LocalAgentBridgeService.cs`, `AgentEditCommandFactory.cs`, `AgentAuditLogService.cs`, domain edit commands
+- Agent editing: `LocalAgentBridgeService.cs`, `AgentEditingContextBuilder.cs`, `AgentEditSkillCatalog.cs`, `AgentEditPlanCompiler.cs`, `AgentEditCommandFactory.cs`, `AgentAuditLogService.cs`, domain edit commands
 - Animation/keyframes: `Keyframe.cs`, `UpdateAnimationChannelsCommand.cs`, `AnimationGraphControl.cs`, `AnimationEditorDialog.cs`
 - Canvas/guides: `CanvasPresentation.cs`, `UpdateSequenceSettingsCommand.cs`, `CanvasSettingsDialog.cs`, `MainWindow.Canvas.cs`
 - Creative assets/extensions: `CreativeAssetPackService.cs`, `ExtensionManifestService.cs`, `CreativeAssetsDialog.cs`, `MainWindow.Assets.cs`

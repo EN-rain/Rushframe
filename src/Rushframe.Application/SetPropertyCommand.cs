@@ -2,7 +2,7 @@ using Rushframe.Domain;
 
 namespace Rushframe.Application;
 
-public sealed class SetPropertyCommand : Domain.Editing.IEditCommand
+public sealed class SetPropertyCommand : Domain.Editing.IAtomicEditCommand
 {
     public string Description => $"Set {PropertyName} on {ItemId}";
 
@@ -24,7 +24,15 @@ public sealed class SetPropertyCommand : Domain.Editing.IEditCommand
             if (item.Locked) return Domain.Editing.EditResult.Fail("Item is locked");
 
             _oldValue = Getter(item);
-            Setter(item, NewValue);
+            try
+            {
+                Setter(item, NewValue);
+            }
+            catch
+            {
+                try { Setter(item, _oldValue); } catch { }
+                throw;
+            }
             return Domain.Editing.EditResult.Ok();
         }
 

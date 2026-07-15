@@ -1,9 +1,9 @@
 # Optional heavyweight features. Install only the capabilities you enable.
 -r requirements-intelligence.txt
+torch==2.8.0
+torchaudio==2.8.0
 whisperx
 pyannote.audio
 paddleocr
+paddlepaddle
 laion-clap
-transformers
-accelerate
-qwen-vl-utils

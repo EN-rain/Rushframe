@@ -54,10 +54,10 @@ public sealed record MediaIntelligenceRunProfile(
         if (!AnalyzeAudio) arguments.Add("--no-audio");
         if (AnalyzeVisuals)
         {
-            if (visualProvider is not ("gemini" or "qwen"))
+            if (!MediaIntelligenceUiPolicy.IsSupportedVisualProvider(visualProvider))
                 throw new ArgumentOutOfRangeException(nameof(visualProvider), visualProvider, "Unsupported visual provider.");
             arguments.Add("--visual-provider");
-            arguments.Add(visualProvider);
+            arguments.Add(MediaIntelligenceUiPolicy.NormalizeVisualProvider(visualProvider));
         }
         if (AlignWords) arguments.Add("--alignment");
     }

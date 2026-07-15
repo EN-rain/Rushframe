@@ -2,7 +2,7 @@ namespace Rushframe.Domain;
 
 public sealed class Project
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 7;
 
     public ProjectId Id { get; init; } = ProjectId.New();
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -12,7 +12,9 @@ public sealed class Project
     public List<Sequence> Sequences { get; init; } = [new()];
     public List<MediaAsset> MediaLibrary { get; init; } = [];
     public List<MediaIntelligenceAnalysis> MediaIntelligence { get; init; } = [];
+    public List<MediaRelationship> MediaRelationships { get; init; } = [];
     public string CampaignDescription { get; set; } = string.Empty;
+    public EditingBrief EditingBrief { get; set; } = new();
     public List<CampaignTask> Tasks { get; init; } = [];
     public List<CreativeAssetProviderManifest> AssetProviders { get; init; } = [];
     public List<ExtensionManifest> Extensions { get; init; } = [];
